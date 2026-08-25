@@ -36,6 +36,9 @@ type Server struct {
 	IVRs           *store.IVRs
 	Lists          *store.Lists
 	Leads          *store.Leads
+	Campaigns      *store.Campaigns
+	AgentAccounts  *store.AgentAccounts
+	LeadCalls      *store.LeadCalls
 	Transports     *store.Transports
 	PJSIP          *store.PJSIPSettingsStore
 	Users          *store.Users
@@ -254,6 +257,40 @@ func (s *Server) Router() http.Handler {
 				r.Get("/leads/{id}", s.handleGetLead)
 				r.Put("/leads/{id}", s.handleUpdateLead)
 				r.Delete("/leads/{id}", s.handleDeleteLead)
+
+				// Working a lead: place the call, record what happened, read
+				// the history. Dialing and dispositioning are edits to the
+				// lead's state, not new objects, so they sit behind "edit".
+				r.Get("/leads/{id}/calls", s.handleLeadCalls)
+				r.Put("/leads/{id}/dial", s.handleDialLead)
+				r.Put("/leads/{id}/disposition", s.handleDispositionLead)
+			})
+
+			// Campaigns, their dispositions and pause codes, and agent
+			// accounts: one operational concern, one permission.
+			r.Group(func(r chi.Router) {
+				r.Use(s.requirePerm("campaigns"))
+				r.Get("/campaigns", s.handleListCampaigns)
+				r.Post("/campaigns", s.handleCreateCampaign)
+				r.Get("/campaigns/{id}", s.handleGetCampaign)
+				r.Put("/campaigns/{id}", s.handleUpdateCampaign)
+				r.Delete("/campaigns/{id}", s.handleDeleteCampaign)
+				r.Get("/campaigns/{id}/next-lead", s.handleNextPreviewLead)
+
+				r.Get("/dispositions", s.handleListDispositions)
+				r.Post("/dispositions", s.handleSaveDisposition)
+				r.Put("/dispositions", s.handleSaveDisposition)
+				r.Delete("/dispositions/{id}", s.handleDeleteDisposition)
+
+				r.Get("/pause-codes", s.handleListPauseCodes)
+				r.Post("/pause-codes", s.handleSavePauseCode)
+				r.Put("/pause-codes", s.handleSavePauseCode)
+				r.Delete("/pause-codes/{id}", s.handleDeletePauseCode)
+
+				r.Get("/agents", s.handleListAgentAccounts)
+				r.Post("/agents", s.handleCreateAgentAccount)
+				r.Put("/agents/{id}", s.handleUpdateAgentAccount)
+				r.Delete("/agents/{id}", s.handleDeleteAgentAccount)
 			})
 
 			// PJSIP transports + global PJSIP/TLS settings (load-time objects

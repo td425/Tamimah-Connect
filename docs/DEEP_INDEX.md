@@ -258,6 +258,7 @@ Migrations are plain SQL in `migrations/NNNN_name.sql`, embedded in the binary
 | 0024 | sla_seconds | `tpbx_system_settings.sla_seconds` (service-level threshold). |
 | 0025 | api_tokens | `tpbx_api_tokens` (hashed bearer tokens for `/api/v1`). |
 | 0026 | leads_lists | `tpbx_lists` + `tpbx_leads`, and the `leads` RBAC feature. See §20. |
+| 0027 | campaigns | `tpbx_campaigns`, `tpbx_dispositions`, `tpbx_pause_codes`, `tpbx_agents` (+ campaign assignments), `tpbx_lead_calls`; promotes `tpbx_lists.campaign_id` to a real reference; `campaigns` RBAC feature. See §21. |
 
 Two families of tables:
 - **`ps_*`** — Asterisk's PJSIP realtime schema. XeloVoice writes rows; Asterisk
@@ -659,6 +660,54 @@ person to call. Nothing dials them yet — campaigns (P2) and the dialer engine
   silently. Rows are attempted independently, as with the extensions bulk upload.
 - **UI:** `web/src/components/Leads.tsx` — a lists table over a filtered,
   paged lead browser with multi-select bulk status changes.
+
+## 21. Campaigns, dispositions, agents (`store/campaigns.go`, `store/agent_accounts.go`, `store/leadcalls.go`, `api/campaigns.go`)
+
+Phase 2 of the parity plan: the object the dialer hangs off, the vocabularies it
+owns, agents as people, and agent-paced dialing.
+
+- **A campaign** (`tpbx_campaigns`) carries a short dialplan-safe `code` (the
+  key everything references — **immutable** after creation, since lists, agents
+  and call records point at it) and a `name`. Its pacing fields (dial method,
+  level, adaptive max, hopper level, drop-rate ceiling) are stored and validated
+  now but **read by nobody until the P4 dialer**; `AutomaticDialing()` tells the
+  console to label those campaigns "waiting for dialer" rather than let an
+  operator think RATIO is placing calls.
+- **The drop-rate ceiling is enforced as a limit, not a target**: values above
+  10% are refused at the store, because it is a regulatory cap on abandoned
+  calls that the P4 pacing loop must stay under.
+- **`outbound_cid` is normalised to digits** by `CheckPhoneNumber` before
+  storage — it goes straight into Asterisk's `CALLERID`, where brackets and
+  spaces are wrong rather than decorative.
+- **Dispositions and pause codes** (`tpbx_dispositions`, `tpbx_pause_codes`) are
+  campaign-scoped with a **system-wide fallback** (`campaign_id IS NULL`),
+  enforced by two partial unique indexes because NULLs do not collide in a plain
+  UNIQUE. Migration 0027 seeds the system set to match `store.SystemStatuses`,
+  so leads written in P1 line up. System rows cannot be deleted — a campaign
+  overrides one by defining its own row with the same code.
+  The semantic flags (`dnc`, `callback`, `recycle_after_sec`) are recorded here
+  and *acted on* by P6 and P4; nothing half-implements them in P2.
+- **Agents are now people** (`tpbx_agents`), not extensions — the split
+  recommended in the parity plan. The extension is the device binding, indexed
+  so `ByExtension` can resolve it. **Softphone auth is deliberately unchanged**:
+  the web, desktop and Android clients still log in with extension + SIP secret
+  (`store/agents.go`, which is about *sessions*); P3 moves that onto this table.
+- **Dialing is agent-paced.** `PUT /leads/{id}/dial` originates to the agent's
+  own extension with `context=from-internal, extension=<lead number>`, so the
+  call goes out over the **outbound routes that already exist** — no
+  dialer-specific dialplan. The number is re-validated at dial time, because a
+  lead can be edited after import.
+- **`tpbx_lead_calls` is one row per attempt.** `Start` bumps the lead's
+  counters; `Apply` stamps the disposition and writes the status back to the
+  lead, keeping the previous one in `last_status`. Dispositioning a lead with no
+  attempt on record (an agent marking up a call made another way) records a
+  completed attempt rather than losing the outcome. P4's dialer writes the same
+  rows, which is why the shape carries channel/timing detail manual dialing
+  leaves empty.
+- **`NextPreviewLead`** is a deliberate stand-in for the P4 hopper: it selects
+  one dialable lead on demand rather than maintaining a queue, and applies no
+  call-time or DNC rules (those are P6). Preview dialing is agent-paced, so a
+  human sees every number first.
 
 ## Console version & header
 

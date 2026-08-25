@@ -280,7 +280,8 @@ export interface LeadList {
   id: number;
   name: string;
   description: string;
-  campaignId: string; // soft reference until campaigns land (phase 2)
+  campaignId: number | null; // the campaign that dials this list; null = unassigned
+  campaignCode?: string;     // joined for display
   active: boolean;
   expiresOn: string; // YYYY-MM-DD, "" = never
   customFields: CustomField[];
@@ -447,6 +448,191 @@ export function importLeads(
   dupDays = 0
 ): Promise<LeadImportResult> {
   return request("POST", "/api/leads/bulk", { listId, leads, dupScope, dupDays });
+}
+
+// --- Campaigns, dispositions, pause codes, agents (parity phase 2) -----------
+
+export interface Campaign {
+  id: number;
+  code: string;
+  name: string;
+  description: string;
+  active: boolean;
+
+  dialMethod: string;
+  dialLevel: number;
+  adaptiveMax: number;
+  hopperLevel: number;
+  dialTimeout: number;
+  leadOrder: string;
+  dialStatuses: string[];
+  dropRateTarget: number;
+  amdEnabled: boolean;
+
+  outboundCid: string;
+  trunk: string;
+  wrapupSeconds: number;
+  script: string;
+
+  listCount: number;
+  leadCount: number;
+  agentCount: number;
+}
+
+// automaticDialing reports whether a dial method needs the phase-4 engine. The
+// UI uses it to say "waiting for the dialer" rather than letting an operator
+// believe RATIO is already placing calls.
+export function automaticDialing(method: string): boolean {
+  return method !== "MANUAL" && method !== "PREVIEW" && method !== "";
+}
+
+export interface Disposition {
+  id: number;
+  campaignId: number | null; // null = system-wide
+  code: string;
+  name: string;
+  selectable: boolean;
+  humanAnswered: boolean;
+  isSale: boolean;
+  notInterested: boolean;
+  dnc: boolean;
+  callback: boolean;
+  recycleAfterSec: number;
+  position: number;
+}
+
+export interface PauseCode {
+  id: number;
+  campaignId: number | null;
+  code: string;
+  name: string;
+  billable: boolean;
+  position: number;
+}
+
+export interface AgentAccount {
+  id: number;
+  username: string;
+  displayName: string;
+  extension: string;
+  active: boolean;
+  campaigns: number[];
+  campaignCodes?: string[];
+}
+
+export interface LeadCall {
+  id: number;
+  leadId: number;
+  campaignId?: number;
+  agent: string;
+  extension: string;
+  direction: string;
+  channelId?: string;
+  dialed: string;
+  startedAt: string;
+  endedAt?: string;
+  status?: string;
+  note?: string;
+}
+
+export interface CampaignsPayload {
+  campaigns: Campaign[];
+  dialMethods: string[];
+  leadOrders: string[];
+}
+
+export async function listCampaigns(): Promise<CampaignsPayload> {
+  const r = await fetch("/api/campaigns");
+  if (!r.ok) throw new Error(`campaigns ${r.status}`);
+  return r.json();
+}
+
+export function createCampaign(c: Partial<Campaign>): Promise<Campaign> {
+  return request("POST", "/api/campaigns", c);
+}
+
+export function updateCampaign(id: number, c: Partial<Campaign>): Promise<any> {
+  return request("PUT", `/api/campaigns/${id}`, c);
+}
+
+export function deleteCampaign(id: number): Promise<any> {
+  return request("DELETE", `/api/campaigns/${id}`);
+}
+
+export async function listDispositions(campaignId = 0): Promise<Disposition[]> {
+  const r = await fetch(`/api/dispositions?campaign=${campaignId}`);
+  if (!r.ok) throw new Error(`dispositions ${r.status}`);
+  return (await r.json()).dispositions ?? [];
+}
+
+export function saveDisposition(d: Partial<Disposition>): Promise<Disposition> {
+  return request(d.id ? "PUT" : "POST", "/api/dispositions", d);
+}
+
+export function deleteDisposition(id: number): Promise<any> {
+  return request("DELETE", `/api/dispositions/${id}`);
+}
+
+export async function listPauseCodes(campaignId = 0): Promise<PauseCode[]> {
+  const r = await fetch(`/api/pause-codes?campaign=${campaignId}`);
+  if (!r.ok) throw new Error(`pause codes ${r.status}`);
+  return (await r.json()).pauseCodes ?? [];
+}
+
+export function savePauseCode(p: Partial<PauseCode>): Promise<PauseCode> {
+  return request(p.id ? "PUT" : "POST", "/api/pause-codes", p);
+}
+
+export function deletePauseCode(id: number): Promise<any> {
+  return request("DELETE", `/api/pause-codes/${id}`);
+}
+
+export async function listAgentAccounts(): Promise<AgentAccount[]> {
+  const r = await fetch("/api/agents");
+  if (!r.ok) throw new Error(`agents ${r.status}`);
+  return (await r.json()).agents ?? [];
+}
+
+export function createAgentAccount(a: Partial<AgentAccount>): Promise<AgentAccount> {
+  return request("POST", "/api/agents", a);
+}
+
+export function updateAgentAccount(id: number, a: Partial<AgentAccount>): Promise<any> {
+  return request("PUT", `/api/agents/${id}`, a);
+}
+
+export function deleteAgentAccount(id: number): Promise<any> {
+  return request("DELETE", `/api/agents/${id}`);
+}
+
+// dialLead rings the agent's own extension first; when they answer, Asterisk
+// dials the lead through the configured outbound routes.
+export function dialLead(
+  leadId: number,
+  input: { extension: string; campaignId?: number; agent?: string }
+): Promise<{ dialed: string; call?: LeadCall; logError?: string }> {
+  return request("PUT", `/api/leads/${leadId}/dial`, input);
+}
+
+export function dispositionLead(
+  leadId: number,
+  input: { status: string; note?: string; callId?: number; campaignId?: number }
+): Promise<LeadCall> {
+  return request("PUT", `/api/leads/${leadId}/disposition`, input);
+}
+
+export async function listLeadCalls(leadId: number): Promise<LeadCall[]> {
+  const r = await fetch(`/api/leads/${leadId}/calls`);
+  if (!r.ok) throw new Error(`calls ${r.status}`);
+  return (await r.json()).calls ?? [];
+}
+
+// nextPreviewLead hands back the next lead the campaign would dial, so the
+// agent can look at it before deciding to place the call.
+export async function nextPreviewLead(campaignId: number): Promise<{ lead: Lead | null; note?: string }> {
+  const r = await fetch(`/api/campaigns/${campaignId}/next-lead`);
+  if (!r.ok) throw new Error(`next lead ${r.status}`);
+  return r.json();
 }
 
 // --- Transports / TLS -------------------------------------------------------
@@ -1001,6 +1187,7 @@ export type Feature =
   | "routing"
   | "ivr"
   | "leads"
+  | "campaigns"
   | "cdr"
   | "analytics"
   | "transports"

@@ -37,10 +37,13 @@ type CustomField struct {
 
 // List is a batch of leads.
 type List struct {
-	ID           int64         `json:"id"`
-	Name         string        `json:"name"`
-	Description  string        `json:"description"`
-	CampaignID   string        `json:"campaignId"` // soft reference until P2
+	ID          int64  `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	// CampaignID is the campaign that dials this list; nil = unassigned. It was
+	// free text in 0026 and became a real reference in 0027.
+	CampaignID   *int64        `json:"campaignId"`
+	CampaignCode string        `json:"campaignCode,omitempty"` // joined for display
 	Active       bool          `json:"active"`
 	ExpiresOn    string        `json:"expiresOn"` // YYYY-MM-DD, "" = never
 	CustomFields []CustomField `json:"customFields"`
@@ -58,7 +61,6 @@ func (l *List) normalise() error {
 	if len(l.Name) < 2 || len(l.Name) > 128 {
 		return errors.New("list name must be 2-128 characters")
 	}
-	l.CampaignID = strings.TrimSpace(l.CampaignID)
 	l.ExpiresOn = strings.TrimSpace(l.ExpiresOn)
 	if l.ExpiresOn != "" {
 		if _, err := time.Parse("2006-01-02", l.ExpiresOn); err != nil {
@@ -103,10 +105,10 @@ func (l *List) normalise() error {
 // List returns every list with its lead count, newest first.
 func (s *Lists) List(ctx context.Context) ([]List, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT l.id, l.name, l.description, l.campaign_id, l.active,
+		SELECT l.id, l.name, l.description, l.campaign_id, COALESCE(c.code,''), l.active,
 		       COALESCE(to_char(l.expires_on,'YYYY-MM-DD'),''), l.custom_fields,
 		       (SELECT count(*) FROM tpbx_leads d WHERE d.list_id = l.id)
-		  FROM tpbx_lists l
+		  FROM tpbx_lists l LEFT JOIN tpbx_campaigns c ON c.id = l.campaign_id
 		 ORDER BY l.id DESC`)
 	if err != nil {
 		return nil, err
@@ -128,10 +130,11 @@ func (s *Lists) List(ctx context.Context) ([]List, error) {
 // summary the console's list panel and ViciDial's list_info both want.
 func (s *Lists) Get(ctx context.Context, id int64) (List, error) {
 	l, err := scanList(s.pool.QueryRow(ctx, `
-		SELECT l.id, l.name, l.description, l.campaign_id, l.active,
+		SELECT l.id, l.name, l.description, l.campaign_id, COALESCE(c.code,''), l.active,
 		       COALESCE(to_char(l.expires_on,'YYYY-MM-DD'),''), l.custom_fields,
 		       (SELECT count(*) FROM tpbx_leads d WHERE d.list_id = l.id)
-		  FROM tpbx_lists l WHERE l.id=$1`, id))
+		  FROM tpbx_lists l LEFT JOIN tpbx_campaigns c ON c.id = l.campaign_id
+		 WHERE l.id=$1`, id))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return l, ErrNotFound
 	}
@@ -160,8 +163,8 @@ func (s *Lists) Get(ctx context.Context, id int64) (List, error) {
 func scanList(row pgx.Row) (List, error) {
 	var l List
 	var raw []byte
-	if err := row.Scan(&l.ID, &l.Name, &l.Description, &l.CampaignID, &l.Active,
-		&l.ExpiresOn, &raw, &l.LeadCount); err != nil {
+	if err := row.Scan(&l.ID, &l.Name, &l.Description, &l.CampaignID, &l.CampaignCode,
+		&l.Active, &l.ExpiresOn, &raw, &l.LeadCount); err != nil {
 		return l, err
 	}
 	l.CustomFields = []CustomField{}
@@ -186,6 +189,9 @@ func (s *Lists) Create(ctx context.Context, l List) (List, error) {
 		INSERT INTO tpbx_lists (name, description, campaign_id, active, expires_on, custom_fields)
 		VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
 		l.Name, l.Description, l.CampaignID, l.Active, nullableDate(l.ExpiresOn), raw).Scan(&l.ID)
+	if err != nil && strings.Contains(err.Error(), "violates foreign key") {
+		return l, errors.New("that campaign does not exist")
+	}
 	return l, err
 }
 
@@ -207,6 +213,9 @@ func (s *Lists) Update(ctx context.Context, l List) error {
 		 WHERE id=$1`,
 		l.ID, l.Name, l.Description, l.CampaignID, l.Active, nullableDate(l.ExpiresOn), raw)
 	if err != nil {
+		if strings.Contains(err.Error(), "violates foreign key") {
+			return errors.New("that campaign does not exist")
+		}
 		return err
 	}
 	if tag.RowsAffected() == 0 {

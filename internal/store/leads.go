@@ -341,7 +341,7 @@ func (s *Leads) findDuplicate(ctx context.Context, phone string, listID int64, s
 			SELECT d.id FROM tpbx_leads d
 			  JOIN tpbx_lists l ON l.id = d.list_id
 			 WHERE d.phone_number=$1
-			   AND l.campaign_id <> ''
+			   AND l.campaign_id IS NOT NULL
 			   AND l.campaign_id = (SELECT campaign_id FROM tpbx_lists WHERE id=$2)`
 		args = []any{phone, listID}
 	case DupSystem:

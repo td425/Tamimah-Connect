@@ -185,7 +185,7 @@ under a `requirePerm` group → typed client in `web/src/api.ts` → a component
 | Phase | Deliverable | Size | Unlocks |
 |---|---|---|---|
 | **P1 — Leads & Lists** ✅ | `tpbx_lists`, `tpbx_leads`, custom fields, header-driven CSV import, dedup scopes, lead search/detail UI, `leads` RBAC feature. **Shipped** — migration 0026, `store/lists.go`, `store/leads.go`, `api/leads.go`, `components/Leads.tsx`; see `DEEP_INDEX.md` §20. | L | everything |
-| **P2 — Campaigns & manual dial** | `tpbx_campaigns`, `tpbx_dispositions`, `tpbx_pause_codes`, campaign CRUD UI, agent picks a campaign at login, manual + preview dial from a lead, disposition on hangup writing back to the lead. No automation yet. | L | a usable outbound desk |
+| **P2 — Campaigns & manual dial** ✅ | `tpbx_campaigns`, `tpbx_dispositions`, `tpbx_pause_codes`, `tpbx_agents`, `tpbx_lead_calls`; campaign CRUD UI, agent accounts with campaign assignment, manual + preview dial from a lead, disposition writing back to the lead. **Shipped** — migration 0027; see `DEEP_INDEX.md` §21. | L | a usable outbound desk |
 | **P3 — Agent desktop v2** | Rework `/phone` into an agent screen: script panel, lead fields with live edit, disposition bar, pause-with-code, callbacks, alt-phone dialing, transfer/conference, park, DTMF, wrap-up timer. Extend the desktop/Android clients to match. | XL | ViciDial's agent surface |
 | **P4 — Dialer engine** | `internal/dialer`: hopper filler, pacing (`RATIO` → `ADAPT_*`), ARI holding-bridge connect, AMD, drop handling + safe harbour, `tpbx_dial_log`, live campaign monitor UI. Compliance rules enforced. | XL | the actual product |
 | **P5 — In-groups & real ACD** | Move the generated `queue` action onto `app_queue` with realtime queues + members (fixes §2.3), skills-based in-groups, DID→in-group routing, agent in-group selection, blended (`INBOUND_MAN`) agents. | L | inbound parity + working dashboard |
@@ -257,26 +257,26 @@ session), `audio_playback`, `switch_lead`, `vm_message`, `calls_in_queue_count`
 
 ---
 
-## 6. Decisions needed before P2 starts
+## 6. Decisions — settled and outstanding
 
-These were open when P1 was written; P1 shipped without needing them, but P2
-cannot. Decide 1 and 2 before campaigns land — both are cheap now and expensive
-after the dialer is built on top.
+**Settled in P2.**
 
-1. **Agent identity.** ViciDial separates a *user* (login, stats, permissions)
-   from a *phone* (SIP device). We currently conflate them — an agent **is** a
-   SIP extension (`store/agents.go`). Campaign/stat/pause modelling wants the
-   split (one agent, many devices; hot-desking). Recommendation: introduce
-   `tpbx_agents` as a first-class user in P2, keeping the extension as the
-   device binding, before the agent-desktop work hard-codes the old assumption.
-2. **Multi-tenancy.** ViciDial has none worth the name. If XeloVoice is sold
-   per-tenant, the campaign/lead tables need a tenant key from day one —
-   retrofitting it after P4 is painful.
-3. **API compatibility.** Native `/api/v1` only, or also a ViciDial-shaped shim
+- **Agent identity** — resolved as recommended: `tpbx_agents` is now a
+  first-class person, with the SIP extension as its device binding. Softphone
+  authentication still runs on extension + SIP secret; P3 moves it across.
+- **Multi-tenancy** — taken as *single-tenant*. Nothing in the product carries a
+  tenant key across 27 migrations, so adding one to only the campaign tables
+  would be incoherent. If multi-tenancy is ever wanted it is a cross-cutting
+  migration over every `tpbx_*` table, not a per-phase choice.
+
+**Still outstanding:**
+
+1. **API compatibility.** Native `/api/v1` only, or also a ViciDial-shaped shim
    (`function=`, pipe-delimited `SUCCESS:`/`ERROR:` strings) so existing customer
    integrations port unchanged? Cheap if decided early, expensive later.
-4. **Scale target.** Agents and calls-per-second per box drives whether the
+2. **Scale target.** Agents and calls-per-second per box drives whether the
    dialer is in-process goroutines (fine to ~100 agents) or a separate service.
+   This one binds at **P4**, not P9: it decides the dialer's deployment shape.
 
 ---
 

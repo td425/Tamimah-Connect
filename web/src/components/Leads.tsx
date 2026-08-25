@@ -2,6 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   can,
   createLead,
+  dialLead,
+  dispositionLead,
+  listCampaigns,
+  listDispositions,
+  listLeadCalls,
   createLeadList,
   deleteLead,
   deleteLeadList,
@@ -13,9 +18,12 @@ import {
   setLeadStatus,
   updateLead,
   updateLeadList,
+  type Campaign,
   type CustomField,
+  type Disposition,
   type DupScope,
   type Lead,
+  type LeadCall,
   type LeadList,
   type Me,
 } from "../api";
@@ -31,7 +39,7 @@ const BLANK_LIST: LeadList = {
   id: 0,
   name: "",
   description: "",
-  campaignId: "",
+  campaignId: null,
   active: true,
   expiresOn: "",
   customFields: [],
@@ -72,7 +80,9 @@ export default function Leads({ notify, me }: { notify: Notify; me: Me }) {
   const canDelete = can(me, "leads", "delete");
 
   const [lists, setLists] = useState<LeadList[]>([]);
+  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [listsLoading, setListsLoading] = useState(true);
+  const [working, setWorking] = useState<Lead | null>(null);
   const [editingList, setEditingList] = useState<LeadList | null>(null);
   const [importInto, setImportInto] = useState<LeadList | null>(null);
 
@@ -97,6 +107,14 @@ export default function Leads({ notify, me }: { notify: Notify; me: Me }) {
   }, [notify]);
 
   useEffect(refreshLists, [refreshLists]);
+
+  // Campaigns drive the list->campaign picker and give a manual dial its
+  // caller ID. A user who cannot see campaigns simply gets an empty picker.
+  useEffect(() => {
+    listCampaigns()
+      .then((p) => setCampaigns(p.campaigns))
+      .catch(() => setCampaigns([]));
+  }, []);
 
   // Debounce the free-text filters so typing doesn't fire a query per keystroke.
   const [debounced, setDebounced] = useState({ phone: "", name: "" });
@@ -280,7 +298,7 @@ export default function Leads({ notify, me }: { notify: Notify; me: Me }) {
                     </a>
                     {l.description && <div className="dash-sub">{l.description}</div>}
                   </td>
-                  <td>{l.campaignId || <span className="hint-inline">unassigned</span>}</td>
+                  <td>{l.campaignCode || <span className="hint-inline">unassigned</span>}</td>
                   <td>{l.leadCount.toLocaleString()}</td>
                   <td>
                     <span className={`badge ${l.active ? "" : "offline"}`}>
@@ -432,6 +450,11 @@ export default function Leads({ notify, me }: { notify: Notify; me: Me }) {
                   <td>{d.owner || "—"}</td>
                   <td className="row-action">
                     {canEdit && (
+                      <button className="btn small" onClick={() => setWorking(d)} title="Call and disposition this lead">
+                        Work
+                      </button>
+                    )}
+                    {canEdit && (
                       <button className="btn small" onClick={() => setEditingLead(d)}>
                         Edit
                       </button>
@@ -470,6 +493,7 @@ export default function Leads({ notify, me }: { notify: Notify; me: Me }) {
       {editingList && (
         <ListForm
           initial={editingList}
+          campaigns={campaigns}
           onClose={() => setEditingList(null)}
           onSaved={(msg) => {
             notify({ kind: "ok", text: msg });
@@ -492,6 +516,19 @@ export default function Leads({ notify, me }: { notify: Notify; me: Me }) {
             refreshLeads();
           }}
           onError={(msg) => notify({ kind: "err", text: msg })}
+        />
+      )}
+
+      {working && (
+        <WorkLeadModal
+          lead={working}
+          campaigns={campaigns}
+          onClose={() => setWorking(null)}
+          onChanged={() => {
+            refreshLists();
+            refreshLeads();
+          }}
+          notify={notify}
         />
       )}
 
@@ -526,11 +563,13 @@ async function openList(id: number, set: (l: LeadList) => void, notify: Notify) 
 
 function ListForm({
   initial,
+  campaigns,
   onClose,
   onSaved,
   onError,
 }: {
   initial: LeadList;
+  campaigns: Campaign[];
   onClose: () => void;
   onSaved: (msg: string) => void;
   onError: (msg: string) => void;
@@ -584,12 +623,18 @@ function ListForm({
               <input value={f.name} placeholder="March web enquiries" onChange={(e) => set("name", e.target.value)} />
             </label>
             <label>
-              Campaign <span className="hint-inline">(optional until campaigns land)</span>
-              <input
-                value={f.campaignId}
-                placeholder="unassigned"
-                onChange={(e) => set("campaignId", e.target.value)}
-              />
+              Campaign
+              <select
+                value={f.campaignId ?? 0}
+                onChange={(e) => set("campaignId", parseInt(e.target.value, 10) || null)}
+              >
+                <option value={0}>Unassigned</option>
+                {campaigns.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.code} — {c.name}
+                  </option>
+                ))}
+              </select>
             </label>
           </div>
 
@@ -1182,6 +1227,215 @@ function ImportModal({
               onClick={submit}
             >
               {busy ? "Importing…" : "Import"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// --- Working a lead (dial · disposition · history) ---------------------------
+
+// WorkLeadModal is phase 2's dialing surface: it rings the agent's own
+// extension first and, when they pick up, Asterisk dials the lead through the
+// outbound routes already configured. One call at a time, agent-paced —
+// automatic pacing needs the phase-4 dialer.
+function WorkLeadModal({
+  lead,
+  campaigns,
+  onClose,
+  onChanged,
+  notify,
+}: {
+  lead: Lead;
+  campaigns: Campaign[];
+  onClose: () => void;
+  onChanged: () => void;
+  notify: Notify;
+}) {
+  // Remember the operator's own extension between calls — it is the same all
+  // shift, and retyping it before every dial is friction nobody needs.
+  const [extension, setExtension] = useState(() => localStorage.getItem("tpbx.dialFrom") ?? "");
+  const [campaignId, setCampaignId] = useState(0);
+  const [dispositions, setDispositions] = useState<Disposition[]>([]);
+  const [calls, setCalls] = useState<LeadCall[]>([]);
+  const [status, setStatus] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [dialed, setDialed] = useState<string | null>(null);
+
+  useEffect(() => {
+    listDispositions(campaignId)
+      .then((d) => setDispositions(d.filter((x) => x.selectable)))
+      .catch(() => setDispositions([]));
+  }, [campaignId]);
+
+  const refreshCalls = useCallback(() => {
+    listLeadCalls(lead.id).then(setCalls).catch(() => setCalls([]));
+  }, [lead.id]);
+
+  useEffect(refreshCalls, [refreshCalls]);
+
+  const onDial = async () => {
+    if (!extension.trim()) {
+      notify({ kind: "err", text: "Enter the extension to ring first." });
+      return;
+    }
+    localStorage.setItem("tpbx.dialFrom", extension.trim());
+    setBusy(true);
+    try {
+      const res = await dialLead(lead.id, {
+        extension: extension.trim(),
+        campaignId: campaignId || undefined,
+      });
+      setDialed(res.dialed);
+      notify({
+        kind: "ok",
+        text: `Ringing ${extension} — it will dial ${res.dialed} when you answer.`,
+      });
+      if (res.logError) {
+        notify({ kind: "err", text: `Call placed, but not logged: ${res.logError}` });
+      }
+      refreshCalls();
+      onChanged();
+    } catch (e) {
+      notify({ kind: "err", text: (e as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onDisposition = async () => {
+    if (!status) {
+      notify({ kind: "err", text: "Pick what happened on the call." });
+      return;
+    }
+    setBusy(true);
+    try {
+      await dispositionLead(lead.id, { status, note, campaignId: campaignId || undefined });
+      notify({ kind: "ok", text: `Lead marked ${status}` });
+      setNote("");
+      refreshCalls();
+      onChanged();
+      onClose();
+    } catch (e) {
+      notify({ kind: "err", text: (e as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const who = [lead.title, lead.firstName, lead.lastName].filter(Boolean).join(" ");
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal wide" onClick={(e) => e.stopPropagation()}>
+        <header>
+          Work Lead · {lead.phoneCode ? `+${lead.phoneCode} ` : ""}
+          {lead.phoneNumber}
+          {who ? ` · ${who}` : ""}
+        </header>
+        <div className="form">
+          <div className="form-row">
+            <label>
+              Campaign <span className="hint-inline">(sets caller ID)</span>
+              <select value={campaignId} onChange={(e) => setCampaignId(parseInt(e.target.value, 10))}>
+                <option value={0}>None — use the outbound route's caller ID</option>
+                {campaigns
+                  .filter((c) => c.active)
+                  .map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.code} — {c.name}
+                    </option>
+                  ))}
+              </select>
+            </label>
+            <label>
+              Ring my extension
+              <input
+                value={extension}
+                placeholder="1001"
+                onChange={(e) => setExtension(e.target.value)}
+              />
+            </label>
+            <label>
+              &nbsp;
+              <button type="button" className="btn" disabled={busy} onClick={onDial}>
+                {busy ? "Working…" : "☎ Dial lead"}
+              </button>
+            </label>
+          </div>
+
+          <p className="hint-inline">
+            Your extension rings first; answer it and Asterisk dials{" "}
+            <code>{lead.phoneCode}{lead.phoneNumber}</code> through the configured outbound routes.
+            {dialed && ` Last dialed ${dialed}.`}
+          </p>
+
+          <div className="form-row">
+            <label>
+              What happened?
+              <select value={status} onChange={(e) => setStatus(e.target.value)}>
+                <option value="">Choose a disposition…</option>
+                {dispositions.map((d) => (
+                  <option key={d.id} value={d.code}>
+                    {d.code} — {d.name}
+                    {d.campaignId ? "" : " (system)"}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Note
+              <input value={note} placeholder="optional" onChange={(e) => setNote(e.target.value)} />
+            </label>
+            <label>
+              &nbsp;
+              <button type="button" className="btn" disabled={busy || !status} onClick={onDisposition}>
+                Save disposition
+              </button>
+            </label>
+          </div>
+
+          <div className="ivr-opts">
+            <div className="ivr-opts-head">
+              <span>Call history</span>
+              <span className="hint-inline">
+                called {lead.calledCount} time(s) · currently {lead.status}
+              </span>
+            </div>
+            {calls.length === 0 ? (
+              <p className="hint-inline">No attempts recorded yet.</p>
+            ) : (
+              <table>
+                <thead>
+                  <tr>
+                    <th>When</th>
+                    <th>Agent</th>
+                    <th>Dialed</th>
+                    <th>Outcome</th>
+                    <th>Note</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {calls.map((c) => (
+                    <tr key={c.id}>
+                      <td>{new Date(c.startedAt).toLocaleString()}</td>
+                      <td>{c.agent || "—"}</td>
+                      <td className="mono-sm">{c.dialed || "—"}</td>
+                      <td>{c.status ? <span className="badge">{c.status}</span> : <span className="hint-inline">open</span>}</td>
+                      <td>{c.note || "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+
+          <div className="form-actions">
+            <button type="button" className="btn ghost" onClick={onClose}>
+              Close
             </button>
           </div>
         </div>
