@@ -182,6 +182,8 @@ func run() error {
 		Trunks:         store.NewTrunks(database.Pool),
 		Routes:         store.NewRoutes(database.Pool),
 		IVRs:           store.NewIVRs(database.Pool),
+		Lists:          store.NewLists(database.Pool),
+		Leads:          store.NewLeads(database.Pool),
 		Transports:     transports,
 		PJSIP:          pjsipSettings,
 		Users:          store.NewUsers(database.Pool),

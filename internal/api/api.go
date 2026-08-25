@@ -34,6 +34,8 @@ type Server struct {
 	Trunks         *store.Trunks
 	Routes         *store.Routes
 	IVRs           *store.IVRs
+	Lists          *store.Lists
+	Leads          *store.Leads
 	Transports     *store.Transports
 	PJSIP          *store.PJSIPSettingsStore
 	Users          *store.Users
@@ -229,6 +231,29 @@ func (s *Server) Router() http.Handler {
 				r.Post("/sounds", s.handleUploadSound)
 				r.Get("/sounds/{name}/audio", s.handleSoundAudio)
 				r.Delete("/sounds/{name}", s.handleDeleteSound)
+			})
+
+			// Lead lists and leads: the CRM half of the dialer. Static
+			// sub-paths come before /{id} for readability; chi prioritises
+			// static segments regardless.
+			r.Group(func(r chi.Router) {
+				r.Use(s.requirePerm("leads"))
+				r.Get("/lists", s.handleListLists)
+				r.Post("/lists", s.handleCreateList)
+				r.Get("/lists/{id}", s.handleGetList)
+				r.Put("/lists/{id}", s.handleUpdateList)
+				r.Delete("/lists/{id}", s.handleDeleteList)
+				// A reset rewrites every lead in the list, so it is an edit.
+				r.Put("/lists/{id}/reset", s.handleResetList)
+
+				r.Get("/leads", s.handleSearchLeads)
+				r.Get("/leads/statuses", s.handleLeadStatuses)
+				r.Post("/leads", s.handleCreateLead)
+				r.Post("/leads/bulk", s.handleBulkLeads)
+				r.Put("/leads/status", s.handleSetLeadStatus)
+				r.Get("/leads/{id}", s.handleGetLead)
+				r.Put("/leads/{id}", s.handleUpdateLead)
+				r.Delete("/leads/{id}", s.handleDeleteLead)
 			})
 
 			// PJSIP transports + global PJSIP/TLS settings (load-time objects

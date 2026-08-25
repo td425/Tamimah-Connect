@@ -267,6 +267,188 @@ export function deleteInboundRoute(id: number): Promise<any> {
   return request("DELETE", `/api/routes/inbound/${id}`);
 }
 
+// --- Lead lists & leads (ViciDial parity, phase 1) ---------------------------
+
+export interface CustomField {
+  name: string;
+  label: string;
+  type: "text" | "number" | "date" | "select";
+  options?: string[];
+}
+
+export interface LeadList {
+  id: number;
+  name: string;
+  description: string;
+  campaignId: string; // soft reference until campaigns land (phase 2)
+  active: boolean;
+  expiresOn: string; // YYYY-MM-DD, "" = never
+  customFields: CustomField[];
+  leadCount: number;
+  statusCount?: Record<string, number>;
+}
+
+export interface Lead {
+  id: number;
+  listId: number;
+  status: string;
+  calledCount: number;
+  lastCalledAt?: string;
+  lastStatus?: string;
+  phoneCode: string;
+  phoneNumber: string;
+  altPhone: string;
+  altPhoneTwo: string;
+  title: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  address1: string;
+  address2: string;
+  city: string;
+  state: string;
+  postalCode: string;
+  country: string;
+  comments: string;
+  vendorLeadCode: string;
+  sourceId: string;
+  owner: string;
+  gmtOffset?: number;
+  custom?: Record<string, unknown>;
+  listName?: string;
+}
+
+// DupScope decides how widely an import looks for an existing copy of a lead:
+// within the list, across the campaign's lists, anywhere, or not at all.
+export type DupScope = "none" | "list" | "campaign" | "system";
+
+export interface LeadQuery {
+  listId?: number;
+  status?: string;
+  phone?: string;
+  name?: string;
+  owner?: string;
+  since?: string;
+  until?: string;
+  limit?: number;
+  offset?: number;
+  order?: "newest" | "oldest";
+}
+
+export interface LeadPage {
+  leads: Lead[];
+  total: number;
+  offset: number;
+}
+
+export interface LeadImportRow {
+  row: number;
+  id?: number;
+  phone: string;
+  ok: boolean;
+  error?: string;
+}
+
+export interface LeadImportResult {
+  created: number;
+  duplicates: number;
+  failed: number;
+  results: LeadImportRow[];
+}
+
+export async function listLeadLists(): Promise<LeadList[]> {
+  const r = await fetch("/api/lists");
+  if (!r.ok) throw new Error(`lists ${r.status}`);
+  const data = await r.json();
+  return data.lists ?? [];
+}
+
+export async function getLeadList(id: number): Promise<LeadList> {
+  const r = await fetch(`/api/lists/${id}`);
+  if (!r.ok) throw new Error(`list ${r.status}`);
+  return r.json();
+}
+
+export function createLeadList(l: Partial<LeadList>): Promise<LeadList> {
+  return request("POST", "/api/lists", l);
+}
+
+export function updateLeadList(id: number, l: Partial<LeadList>): Promise<any> {
+  return request("PUT", `/api/lists/${id}`, l);
+}
+
+// leadCount is echoed back as a confirmation: the server refuses the delete if
+// the list has grown since it was displayed, so a delete never destroys more
+// leads than the operator was shown.
+export function deleteLeadList(id: number, leadCount: number): Promise<any> {
+  return request("DELETE", `/api/lists/${id}?leads=${leadCount}`);
+}
+
+export function resetLeadList(id: number): Promise<{ leads: number }> {
+  return request("PUT", `/api/lists/${id}/reset`);
+}
+
+export async function searchLeads(q: LeadQuery): Promise<LeadPage> {
+  const p = new URLSearchParams();
+  if (q.listId) p.set("listId", String(q.listId));
+  if (q.status) p.set("status", q.status);
+  if (q.phone) p.set("phone", q.phone);
+  if (q.name) p.set("name", q.name);
+  if (q.owner) p.set("owner", q.owner);
+  if (q.since) p.set("since", q.since);
+  if (q.until) p.set("until", q.until);
+  if (q.limit) p.set("limit", String(q.limit));
+  if (q.offset) p.set("offset", String(q.offset));
+  if (q.order) p.set("order", q.order);
+  const r = await fetch(`/api/leads?${p.toString()}`);
+  if (!r.ok) {
+    const data = await r.json().catch(() => ({}));
+    throw new Error(data?.error || `leads ${r.status}`);
+  }
+  return r.json();
+}
+
+export async function getLeadStatuses(): Promise<string[]> {
+  const r = await fetch("/api/leads/statuses");
+  if (!r.ok) throw new Error(`statuses ${r.status}`);
+  const data = await r.json();
+  return data.statuses ?? [];
+}
+
+export async function getLead(id: number): Promise<Lead> {
+  const r = await fetch(`/api/leads/${id}`);
+  if (!r.ok) throw new Error(`lead ${r.status}`);
+  return r.json();
+}
+
+export function createLead(
+  lead: Partial<Lead>,
+  dupScope: DupScope = "list"
+): Promise<Lead> {
+  return request("POST", "/api/leads", { ...lead, dupScope });
+}
+
+export function updateLead(id: number, lead: Partial<Lead>): Promise<any> {
+  return request("PUT", `/api/leads/${id}`, lead);
+}
+
+export function deleteLead(id: number): Promise<any> {
+  return request("DELETE", `/api/leads/${id}`);
+}
+
+export function setLeadStatus(ids: number[], status: string): Promise<{ updated: number }> {
+  return request("PUT", "/api/leads/status", { ids, status });
+}
+
+export function importLeads(
+  listId: number,
+  leads: Partial<Lead>[],
+  dupScope: DupScope,
+  dupDays = 0
+): Promise<LeadImportResult> {
+  return request("POST", "/api/leads/bulk", { listId, leads, dupScope, dupDays });
+}
+
 // --- Transports / TLS -------------------------------------------------------
 
 export interface Transport {
@@ -818,6 +1000,7 @@ export type Feature =
   | "trunks"
   | "routing"
   | "ivr"
+  | "leads"
   | "cdr"
   | "analytics"
   | "transports"

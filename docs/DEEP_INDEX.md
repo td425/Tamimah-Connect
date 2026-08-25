@@ -251,6 +251,13 @@ Migrations are plain SQL in `migrations/NNNN_name.sql`, embedded in the binary
 | 0017 | roles | `tpbx_roles` (per-feature `permissions` JSONB, `require_totp`, `built_in`); seeds admin/manager/operator/viewer. See §17. |
 | 0018 | totp | `tpbx_users.totp_secret` + `totp_enabled` (two-factor). See §18. |
 | 0019 | pjsip_settings | `tpbx_pjsip_settings` (singleton row: global res_pjsip options + TLS defaults). See §19. |
+| 0020 | system_settings | `tpbx_system_settings` (singleton: public domain, brand name, default theme, timezone). |
+| 0021 | softphone_events | `tpbx_softphone_events` (client-side telemetry: DND, registration, per-call outcome). |
+| 0022 | call_dispositions | Wrap-up columns on `tpbx_softphone_events` (nature, resolution, hangup cause, note). |
+| 0023 | queue_log | `queue_log` — Asterisk app_queue's own log, written via realtime. Source of the call-center dashboard. |
+| 0024 | sla_seconds | `tpbx_system_settings.sla_seconds` (service-level threshold). |
+| 0025 | api_tokens | `tpbx_api_tokens` (hashed bearer tokens for `/api/v1`). |
+| 0026 | leads_lists | `tpbx_lists` + `tpbx_leads`, and the `leads` RBAC feature. See §20. |
 
 Two families of tables:
 - **`ps_*`** — Asterisk's PJSIP realtime schema. XeloVoice writes rows; Asterisk
@@ -618,6 +625,40 @@ singleton row `tpbx_pjsip_settings`.
   toggles, mirroring the reference UI.
 - **Startup:** `main.regeneratePJSIPGlobals` + `regenerateTransports` (now takes
   the TLS defaults) run on boot, best-effort.
+
+## 20. Leads & lists (`store/lists.go`, `store/leads.go`, `api/leads.go`)
+
+Phase 1 of the ViciDial parity plan (`docs/VICIDIAL_PARITY.md`): the CRM half of
+a dialer. A **list** is a batch of leads loaded for one purpose; a **lead** is a
+person to call. Nothing dials them yet — campaigns (P2) and the dialer engine
+(P4) are what put these rows to work.
+
+- **Schema (0026).** `tpbx_lists` (name, campaign_id, active, expiry, a JSONB
+  `custom_fields` schema) and `tpbx_leads` (dial state, three phone numbers,
+  contact detail, provenance, `gmt_offset`, a JSONB `custom` bag), with
+  `ON DELETE CASCADE` from list to lead.
+- **Two deliberate forward references**, plain columns rather than foreign keys
+  because their targets do not exist yet: `tpbx_lists.campaign_id` →
+  `tpbx_campaigns` (P2) and `tpbx_leads.status` → `tpbx_dispositions` (P2).
+- **Phone numbers are normalised on the way in** by `store.CheckPhoneNumber`:
+  formatting is stripped to digits, 6-18 digits accepted. The same function must
+  be used by manual dial and (from P4) hopper fill, so it lives in the store,
+  not a handler.
+- **Duplicate scopes** on create/import: `none` | `list` | `campaign` | `system`,
+  with an optional day window. A duplicate returns `store.ErrDuplicate` → 409.
+- **Custom fields are schema'd per list.** Values not declared by the list are
+  dropped on write, so a stray import column can't bloat every row. Removing a
+  field from the schema hides it but does not destroy stored values.
+- **Deleting a list is guarded**: the client must send the lead count it showed
+  the operator (`?leads=N`) and the store refuses if the list has since grown —
+  a cascade delete can never destroy more than was confirmed.
+- **Import** is header-driven, not positional (`Leads.tsx` `parseLeadCSV`):
+  the header names the columns in any order, aliases are generous
+  (`phone`/`mobile`/`msisdn`…), columns matching the list's custom fields are
+  carried into them, and unmatched columns are reported rather than dropped
+  silently. Rows are attempted independently, as with the extensions bulk upload.
+- **UI:** `web/src/components/Leads.tsx` — a lists table over a filtered,
+  paged lead browser with multi-select bulk status changes.
 
 ## Console version & header
 

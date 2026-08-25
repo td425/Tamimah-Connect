@@ -184,7 +184,7 @@ under a `requirePerm` group → typed client in `web/src/api.ts` → a component
 
 | Phase | Deliverable | Size | Unlocks |
 |---|---|---|---|
-| **P1 — Leads & Lists** | `tpbx_lists`, `tpbx_leads`, custom fields, import (reuse the CSV bulk-upload pattern from `Extensions.tsx`), dedup rules, lead search/detail UI. New RBAC feature `leads`. | L | everything |
+| **P1 — Leads & Lists** ✅ | `tpbx_lists`, `tpbx_leads`, custom fields, header-driven CSV import, dedup scopes, lead search/detail UI, `leads` RBAC feature. **Shipped** — migration 0026, `store/lists.go`, `store/leads.go`, `api/leads.go`, `components/Leads.tsx`; see `DEEP_INDEX.md` §20. | L | everything |
 | **P2 — Campaigns & manual dial** | `tpbx_campaigns`, `tpbx_dispositions`, `tpbx_pause_codes`, campaign CRUD UI, agent picks a campaign at login, manual + preview dial from a lead, disposition on hangup writing back to the lead. No automation yet. | L | a usable outbound desk |
 | **P3 — Agent desktop v2** | Rework `/phone` into an agent screen: script panel, lead fields with live edit, disposition bar, pause-with-code, callbacks, alt-phone dialing, transfer/conference, park, DTMF, wrap-up timer. Extend the desktop/Android clients to match. | XL | ViciDial's agent surface |
 | **P4 — Dialer engine** | `internal/dialer`: hopper filler, pacing (`RATIO` → `ADAPT_*`), ARI holding-bridge connect, AMD, drop handling + safe harbour, `tpbx_dial_log`, live campaign monitor UI. Compliance rules enforced. | XL | the actual product |
@@ -257,7 +257,11 @@ session), `audio_playback`, `switch_lead`, `vm_message`, `calls_in_queue_count`
 
 ---
 
-## 6. Decisions needed before P1 starts
+## 6. Decisions needed before P2 starts
+
+These were open when P1 was written; P1 shipped without needing them, but P2
+cannot. Decide 1 and 2 before campaigns land — both are cheap now and expensive
+after the dialer is built on top.
 
 1. **Agent identity.** ViciDial separates a *user* (login, stats, permissions)
    from a *phone* (SIP device). We currently conflate them — an agent **is** a

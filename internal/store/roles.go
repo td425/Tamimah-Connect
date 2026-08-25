@@ -14,7 +14,7 @@ import (
 // Features are the console areas a role's permissions are expressed over. The
 // order here is the order the admin Roles editor renders them in.
 var Features = []string{
-	"extensions", "trunks", "routing", "ivr",
+	"extensions", "trunks", "routing", "ivr", "leads",
 	"cdr", "analytics", "transports", "settings", "users",
 }
 
