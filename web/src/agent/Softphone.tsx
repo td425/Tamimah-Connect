@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { agentConfig, agentLogin, agentLogout, type AgentConfig } from "./api";
+import AgentDesk from "./AgentDesk";
 import { Softphone as SipPhone, type PhoneState, type CallLogEntry } from "./sip";
 import { Ringer } from "./ringer";
 import logoDark from "../assets/xelo-dark.png";
@@ -252,6 +253,11 @@ export default function Softphone() {
           )}
 
           {error && <div className="phone-error">{error}</div>}
+
+          {/* The campaign side of the screen. It renders nothing when the
+              agent works no campaigns, so a deployment that does not use them
+              sees exactly the softphone it had before. */}
+          <AgentDesk />
 
           <div className="phone-display">
             {transferring ? (

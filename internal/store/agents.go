@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -123,8 +124,12 @@ func (s *Agents) DeleteSession(ctx context.Context, token string) {
 	_, _ = s.pool.Exec(ctx, `DELETE FROM tpbx_agent_sessions WHERE token=$1`, token)
 }
 
-// callerIDName extracts the display-name part from a PJSIP callerid value such
-// as `"Alice" <1001>`, falling back to the whole string when it has no quotes.
+// callerIDName extracts the display-name part from a PJSIP callerid value.
+//
+// Both spellings occur and both must work: the quoted `"Alice" <1001>` that
+// Asterisk documentation uses, and the bare `Alice <1001>` that the console's
+// own Extensions form suggests. Handling only the quoted form is why a
+// softphone used to greet its agent by extension number instead of by name.
 func callerIDName(cid string) string {
 	if cid == "" {
 		return ""
@@ -134,7 +139,13 @@ func callerIDName(cid string) string {
 			return cid[i+1 : i+1+j]
 		}
 	}
-	return ""
+	// Unquoted: everything before the angle-bracketed number is the name.
+	if i := indexByte(cid, '<'); i > 0 {
+		return strings.TrimSpace(cid[:i])
+	}
+	// A bare value with no number at all is the name itself. When it is just
+	// the extension repeated, callers fall back to the extension regardless.
+	return strings.TrimSpace(cid)
 }
 
 func indexByte(s string, b byte) int {

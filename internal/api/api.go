@@ -34,6 +34,12 @@ type Server struct {
 	Trunks         *store.Trunks
 	Routes         *store.Routes
 	IVRs           *store.IVRs
+	Lists          *store.Lists
+	Leads          *store.Leads
+	Campaigns      *store.Campaigns
+	AgentAccounts  *store.AgentAccounts
+	LeadCalls      *store.LeadCalls
+	Work           *store.AgentWork
 	Transports     *store.Transports
 	PJSIP          *store.PJSIPSettingsStore
 	Users          *store.Users
@@ -147,6 +153,19 @@ func (s *Server) Router() http.Handler {
 				r.Post("/telemetry", s.handleAgentTelemetry)
 				r.Get("/calls", s.handleAgentCalls)
 				r.Delete("/calls", s.handleAgentClearCalls)
+
+				// The agent desktop (phase 3). Every one of these resolves the
+				// agent from the session, never from the body, so an agent can
+				// only ever act as themselves.
+				r.Get("/session", s.handleAgentSession)
+				r.Get("/next-lead", s.handleAgentNextLead)
+				r.Get("/callbacks", s.handleAgentCallbacks)
+				r.Post("/campaign", s.handleAgentSetCampaign)
+				r.Post("/pause", s.handleAgentPause)
+				r.Post("/dial", s.handleAgentDial)
+				r.Post("/disposition", s.handleAgentDisposition)
+				r.Post("/lead", s.handleAgentUpdateLead)
+				r.Post("/take-lead", s.handleAgentTakeLead)
 			})
 		})
 
@@ -229,6 +248,63 @@ func (s *Server) Router() http.Handler {
 				r.Post("/sounds", s.handleUploadSound)
 				r.Get("/sounds/{name}/audio", s.handleSoundAudio)
 				r.Delete("/sounds/{name}", s.handleDeleteSound)
+			})
+
+			// Lead lists and leads: the CRM half of the dialer. Static
+			// sub-paths come before /{id} for readability; chi prioritises
+			// static segments regardless.
+			r.Group(func(r chi.Router) {
+				r.Use(s.requirePerm("leads"))
+				r.Get("/lists", s.handleListLists)
+				r.Post("/lists", s.handleCreateList)
+				r.Get("/lists/{id}", s.handleGetList)
+				r.Put("/lists/{id}", s.handleUpdateList)
+				r.Delete("/lists/{id}", s.handleDeleteList)
+				// A reset rewrites every lead in the list, so it is an edit.
+				r.Put("/lists/{id}/reset", s.handleResetList)
+
+				r.Get("/leads", s.handleSearchLeads)
+				r.Get("/leads/statuses", s.handleLeadStatuses)
+				r.Post("/leads", s.handleCreateLead)
+				r.Post("/leads/bulk", s.handleBulkLeads)
+				r.Put("/leads/status", s.handleSetLeadStatus)
+				r.Get("/leads/{id}", s.handleGetLead)
+				r.Put("/leads/{id}", s.handleUpdateLead)
+				r.Delete("/leads/{id}", s.handleDeleteLead)
+
+				// Working a lead: place the call, record what happened, read
+				// the history. Dialing and dispositioning are edits to the
+				// lead's state, not new objects, so they sit behind "edit".
+				r.Get("/leads/{id}/calls", s.handleLeadCalls)
+				r.Put("/leads/{id}/dial", s.handleDialLead)
+				r.Put("/leads/{id}/disposition", s.handleDispositionLead)
+			})
+
+			// Campaigns, their dispositions and pause codes, and agent
+			// accounts: one operational concern, one permission.
+			r.Group(func(r chi.Router) {
+				r.Use(s.requirePerm("campaigns"))
+				r.Get("/campaigns", s.handleListCampaigns)
+				r.Post("/campaigns", s.handleCreateCampaign)
+				r.Get("/campaigns/{id}", s.handleGetCampaign)
+				r.Put("/campaigns/{id}", s.handleUpdateCampaign)
+				r.Delete("/campaigns/{id}", s.handleDeleteCampaign)
+				r.Get("/campaigns/{id}/next-lead", s.handleNextPreviewLead)
+
+				r.Get("/dispositions", s.handleListDispositions)
+				r.Post("/dispositions", s.handleSaveDisposition)
+				r.Put("/dispositions", s.handleSaveDisposition)
+				r.Delete("/dispositions/{id}", s.handleDeleteDisposition)
+
+				r.Get("/pause-codes", s.handleListPauseCodes)
+				r.Post("/pause-codes", s.handleSavePauseCode)
+				r.Put("/pause-codes", s.handleSavePauseCode)
+				r.Delete("/pause-codes/{id}", s.handleDeletePauseCode)
+
+				r.Get("/agents", s.handleListAgentAccounts)
+				r.Post("/agents", s.handleCreateAgentAccount)
+				r.Put("/agents/{id}", s.handleUpdateAgentAccount)
+				r.Delete("/agents/{id}", s.handleDeleteAgentAccount)
 			})
 
 			// PJSIP transports + global PJSIP/TLS settings (load-time objects
