@@ -40,6 +40,7 @@ type Server struct {
 	AgentAccounts  *store.AgentAccounts
 	LeadCalls      *store.LeadCalls
 	Work           *store.AgentWork
+	Hopper         *store.Hopper
 	Transports     *store.Transports
 	PJSIP          *store.PJSIPSettingsStore
 	Users          *store.Users
@@ -290,6 +291,19 @@ func (s *Server) Router() http.Handler {
 				r.Put("/campaigns/{id}", s.handleUpdateCampaign)
 				r.Delete("/campaigns/{id}", s.handleDeleteCampaign)
 				r.Get("/campaigns/{id}/next-lead", s.handleNextPreviewLead)
+
+				// Dialer control and live state. Starting the machine is an
+				// edit to the campaign, not a new object.
+				r.Get("/campaigns/{id}/dialer", s.handleDialerStatus)
+				r.Put("/campaigns/{id}/dialer", s.handleSetDialerRunning)
+				r.Get("/campaigns/{id}/hopper", s.handleListHopper)
+				r.Delete("/campaigns/{id}/hopper", s.handlePurgeHopper)
+
+				// Do-Not-Call. Suppression is campaign administration, and it
+				// is what makes automatic dialing lawful.
+				r.Get("/dnc", s.handleListDNC)
+				r.Post("/dnc", s.handleAddDNC)
+				r.Delete("/dnc/{id}", s.handleRemoveDNC)
 
 				r.Get("/dispositions", s.handleListDispositions)
 				r.Post("/dispositions", s.handleSaveDisposition)

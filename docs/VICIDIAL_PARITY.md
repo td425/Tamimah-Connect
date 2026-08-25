@@ -187,7 +187,7 @@ under a `requirePerm` group → typed client in `web/src/api.ts` → a component
 | **P1 — Leads & Lists** ✅ | `tpbx_lists`, `tpbx_leads`, custom fields, header-driven CSV import, dedup scopes, lead search/detail UI, `leads` RBAC feature. **Shipped** — migration 0026, `store/lists.go`, `store/leads.go`, `api/leads.go`, `components/Leads.tsx`; see `DEEP_INDEX.md` §20. | L | everything |
 | **P2 — Campaigns & manual dial** ✅ | `tpbx_campaigns`, `tpbx_dispositions`, `tpbx_pause_codes`, `tpbx_agents`, `tpbx_lead_calls`; campaign CRUD UI, agent accounts with campaign assignment, manual + preview dial from a lead, disposition writing back to the lead. **Shipped** — migration 0027; see `DEEP_INDEX.md` §21. | L | a usable outbound desk |
 | **P3 — Agent desktop v2** ✅ (web) | Agent screen on `/phone`: campaign selection, pause-with-code, script panel, lead on screen with live field edit, disposition bar, callbacks, alt-phone dialing, wrap-up timer; agent identity resolved from the softphone login. **Shipped** — migration 0028; see `DEEP_INDEX.md` §22. Transfer/conference, park and DTMF already exist in the phone itself. The Electron and native-Android clients still need the same panel — they cannot be built or tested in this container (see `NATIVE_SOFTPHONE.md`), and their `/api/agent/*` contract is unchanged, so they keep working as before. | XL | ViciDial's agent surface |
-| **P4 — Dialer engine** | `internal/dialer`: hopper filler, pacing (`RATIO` → `ADAPT_*`), ARI holding-bridge connect, AMD, drop handling + safe harbour, `tpbx_dial_log`, live campaign monitor UI. Compliance rules enforced. | XL | the actual product |
+| **P4 — Dialer engine** ✅ | `internal/dialer`: hopper filler, pacing (`RATIO` → `ADAPT_*`) with a hard abandoned-call brake, ARI holding-bridge connect, drop handling + safe harbour, outcome logging, live dialer panel, and DNC (pulled forward from P6 — a machine that cannot check a suppression list must not dial). **Shipped** — migration 0029; see `DEEP_INDEX.md` §23. The ARI call flow needs a live Asterisk to exercise; AMD and call-time windows are not done (below). | XL | the actual product |
 | **P5 — In-groups & real ACD** | Move the generated `queue` action onto `app_queue` with realtime queues + members (fixes §2.3), skills-based in-groups, DID→in-group routing, agent in-group selection, blended (`INBOUND_MAN`) agents. | L | inbound parity + working dashboard |
 | **P6 — Compliance & data hygiene** | DNC (global + per-campaign), filter phone groups, call-time/timezone windows, lead archive/dearchive, list reset, duplicate-check options. | M | legal to run |
 | **P7 — Recordings & monitoring** | Recording index + playback UI, on-demand start/stop, listen/whisper/barge (`blind_monitor` equivalent via ARI snoop), QA scoring hooks. | M | supervision |
@@ -274,9 +274,21 @@ session), `audio_playback`, `switch_lead`, `vm_message`, `calls_in_queue_count`
 1. **API compatibility.** Native `/api/v1` only, or also a ViciDial-shaped shim
    (`function=`, pipe-delimited `SUCCESS:`/`ERROR:` strings) so existing customer
    integrations port unchanged? Cheap if decided early, expensive later.
-2. **Scale target.** Agents and calls-per-second per box drives whether the
-   dialer is in-process goroutines (fine to ~100 agents) or a separate service.
-   This one binds at **P4**, not P9: it decides the dialer's deployment shape.
+2. **Scale target** — settled at P4 as **in-process goroutines**, sized for the
+   single-VM deployment (~100 agents). Revisit if a deployment needs more: the
+   `Engine` type is the extraction seam and the hopper claim is already safe
+   against a second dialer.
+
+**Carried forward from P4:**
+
+- **AMD (answering-machine detection)** is a campaign flag and a column, not yet
+  a behaviour. Without it, a machine that answers is connected to an agent like
+  any other answer.
+- **Call-time windows** (per-state, per-timezone) remain P6, and need per-lead
+  timezone derivation. Until they land, the only guard on *when* a campaign
+  dials is that a supervisor started it.
+- **The safe-harbour prompt** (`sound:tpbx/safe-harbour`) must be uploaded to
+  the prompt library; an abandoned call otherwise gets silence before hangup.
 
 ---
 

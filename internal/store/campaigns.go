@@ -72,6 +72,11 @@ type Campaign struct {
 	WrapupSeconds int    `json:"wrapupSeconds"`
 	Script        string `json:"script"`
 
+	// DialerRunning is whether the engine is placing calls for this campaign
+	// right now. Separate from Active: stopping the dialer must not retire the
+	// campaign. Set through the dialer endpoints, never through campaign CRUD.
+	DialerRunning bool `json:"dialerRunning"`
+
 	// Computed for display, never written.
 	ListCount  int `json:"listCount"`
 	LeadCount  int `json:"leadCount"`
@@ -188,7 +193,7 @@ const campaignColumns = `
 	c.id, c.code, c.name, c.description, c.active,
 	c.dial_method, c.dial_level, c.adaptive_max, c.hopper_level, c.dial_timeout,
 	c.lead_order, c.dial_statuses, c.drop_rate_target, c.amd_enabled,
-	c.outbound_cid, c.trunk, c.wrapup_seconds, c.script,
+	c.outbound_cid, c.trunk, c.wrapup_seconds, c.script, c.dialer_running,
 	(SELECT count(*) FROM tpbx_lists l WHERE l.campaign_id = c.id),
 	(SELECT count(*) FROM tpbx_leads d JOIN tpbx_lists l2 ON l2.id = d.list_id WHERE l2.campaign_id = c.id),
 	(SELECT count(*) FROM tpbx_agent_campaigns ac WHERE ac.campaign_id = c.id)`
@@ -198,7 +203,7 @@ func scanCampaign(row pgx.Row) (Campaign, error) {
 	err := row.Scan(&c.ID, &c.Code, &c.Name, &c.Description, &c.Active,
 		&c.DialMethod, &c.DialLevel, &c.AdaptiveMax, &c.HopperLevel, &c.DialTimeout,
 		&c.LeadOrder, &c.DialStatuses, &c.DropRateTarget, &c.AMDEnabled,
-		&c.OutboundCID, &c.Trunk, &c.WrapupSeconds, &c.Script,
+		&c.OutboundCID, &c.Trunk, &c.WrapupSeconds, &c.Script, &c.DialerRunning,
 		&c.ListCount, &c.LeadCount, &c.AgentCount)
 	return c, err
 }

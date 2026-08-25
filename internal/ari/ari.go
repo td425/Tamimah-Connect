@@ -310,3 +310,115 @@ func (c *Client) StreamEvents(ctx context.Context, onEvent func(Event)) error {
 		onEvent(ev)
 	}
 }
+
+// --- Bridges and call control (used by the outbound dialer) -----------------
+//
+// The dialer connects a customer to an agent by moving the customer's channel
+// into a bridge the agent is already sitting in, rather than dialing the agent
+// and waiting for them to answer. That is what makes a predictive connect feel
+// instant: the agent hears the customer with no ring, because their leg was
+// already up.
+
+// Bridge is an ARI bridge resource.
+type Bridge struct {
+	ID         string   `json:"id"`
+	Technology string   `json:"technology"`
+	BridgeType string   `json:"bridge_type"`
+	Channels   []string `json:"channels"`
+}
+
+// CreateBridge creates (or returns, if the id already exists) a mixing bridge.
+// ARI treats POST bridges with an explicit id as create-or-get, which is what
+// makes an agent's bridge safe to re-assert after a reconnect.
+func (c *Client) CreateBridge(ctx context.Context, id string) (Bridge, error) {
+	var b Bridge
+	q := url.Values{}
+	q.Set("type", "mixing")
+	q.Set("bridgeId", id)
+	err := c.do(ctx, http.MethodPost, "bridges", q, &b)
+	return b, err
+}
+
+// GetBridge returns one bridge by id.
+func (c *Client) GetBridge(ctx context.Context, id string) (Bridge, error) {
+	var b Bridge
+	err := c.get(ctx, "bridges/"+id, &b)
+	return b, err
+}
+
+// AddToBridge places a channel into a bridge.
+func (c *Client) AddToBridge(ctx context.Context, bridgeID string, channelIDs ...string) error {
+	if len(channelIDs) == 0 {
+		return nil
+	}
+	q := url.Values{}
+	q.Set("channel", strings.Join(channelIDs, ","))
+	return c.do(ctx, http.MethodPost, "bridges/"+bridgeID+"/addChannel", q, nil)
+}
+
+// RemoveFromBridge takes a channel out of a bridge without hanging it up, so an
+// agent's own leg survives the customer leaving.
+func (c *Client) RemoveFromBridge(ctx context.Context, bridgeID string, channelIDs ...string) error {
+	if len(channelIDs) == 0 {
+		return nil
+	}
+	q := url.Values{}
+	q.Set("channel", strings.Join(channelIDs, ","))
+	return c.do(ctx, http.MethodPost, "bridges/"+bridgeID+"/removeChannel", q, nil)
+}
+
+// DestroyBridge tears a bridge down.
+func (c *Client) DestroyBridge(ctx context.Context, id string) error {
+	return c.do(ctx, http.MethodDelete, "bridges/"+id, nil, nil)
+}
+
+// OriginateToApp places a call that lands in this Stasis application instead of
+// the dialplan, so the engine owns the channel from the moment it answers. That
+// ownership is the whole point: the dialer has to decide, per call, whether a
+// human answered and whether an agent is free — decisions the dialplan cannot
+// make for it.
+//
+// vars are set on the channel before dialing, which is how the engine
+// correlates the answer back to the lead that caused it.
+func (c *Client) OriginateToApp(ctx context.Context, endpoint, callerID, timeout string, vars map[string]string) (Channel, error) {
+	var ch Channel
+	if endpoint == "" {
+		return ch, fmt.Errorf("endpoint is required")
+	}
+	q := url.Values{}
+	q.Set("endpoint", endpoint)
+	q.Set("app", c.appName)
+	if callerID != "" {
+		q.Set("callerId", callerID)
+	}
+	q.Set("timeout", orDefault(timeout, "30"))
+	for k, v := range vars {
+		q.Set("variables["+k+"]", v)
+	}
+	err := c.do(ctx, http.MethodPost, "channels", q, &ch)
+	return ch, err
+}
+
+// Answer answers a channel that reached Stasis.
+func (c *Client) Answer(ctx context.Context, channelID string) error {
+	return c.do(ctx, http.MethodPost, "channels/"+channelID+"/answer", nil, nil)
+}
+
+// Play starts media on a channel and returns the playback id. media is an ARI
+// media URI, e.g. "sound:/var/lib/asterisk/sounds/en/tpbx/safe-harbour".
+func (c *Client) Play(ctx context.Context, channelID, media string) (string, error) {
+	var pb struct {
+		ID string `json:"id"`
+	}
+	q := url.Values{}
+	q.Set("media", media)
+	err := c.do(ctx, http.MethodPost, "channels/"+channelID+"/play", q, &pb)
+	return pb.ID, err
+}
+
+// ChannelVar reads one channel variable, returning "" when unset or on error.
+// Exported for the dialer, which uses channel variables to carry the lead id
+// through the originate and back out on the Stasis event.
+func (c *Client) ChannelVar(ctx context.Context, channelID, name string) string {
+	return c.channelVar(ctx, channelID, name)
+}

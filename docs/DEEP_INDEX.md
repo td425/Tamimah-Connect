@@ -260,6 +260,7 @@ Migrations are plain SQL in `migrations/NNNN_name.sql`, embedded in the binary
 | 0026 | leads_lists | `tpbx_lists` + `tpbx_leads`, and the `leads` RBAC feature. See §20. |
 | 0027 | campaigns | `tpbx_campaigns`, `tpbx_dispositions`, `tpbx_pause_codes`, `tpbx_agents` (+ campaign assignments), `tpbx_lead_calls`; promotes `tpbx_lists.campaign_id` to a real reference; `campaigns` RBAC feature. See §21. |
 | 0028 | agent_desktop | `tpbx_agent_state` (live working state), `tpbx_agent_log` (append-only shift log), `tpbx_callbacks`. See §22. |
+| 0029 | dialer | `tpbx_hopper`, `tpbx_dnc`, outcome columns on `tpbx_lead_calls`, `tpbx_campaigns.dialer_running`. See §23. |
 
 Two families of tables:
 - **`ps_*`** — Asterisk's PJSIP realtime schema. XeloVoice writes rows; Asterisk
@@ -760,6 +761,71 @@ A note on `callerIDName` (`store/agents.go`): it now understands the bare
 form suggests the bare spelling, so softphones had been greeting agents by
 extension number instead of by name — and phase 3 would have persisted that
 into the agent record.
+
+## 23. The dialer engine (`internal/dialer`, `store/hopper.go`, `api/dialer.go`)
+
+Phase 4: the machine places the calls. One in-process loop per running
+campaign — `dialer.Engine`, started by `main` beside the ARI/AMI loops.
+
+**Scale.** In-process goroutines, sized for the single-VM deployment this
+product targets (~100 agents). The seam for extracting it is the `Engine` type,
+which talks only to Postgres and ARI; the hopper claim already uses
+`FOR UPDATE SKIP LOCKED`, so a second dialer would not double-dial anyone.
+
+**How a call is made.** Calls are originated **into the Stasis app**, not the
+dialplan (`ari.OriginateToApp`), so the engine owns the channel from the moment
+it answers — only the engine knows whether an agent is free, and that decision
+cannot be delegated. Agents wait in a per-agent ARI **holding bridge** with
+their leg already up (`ensureAgentLeg`); an answered customer is *moved into*
+it, which is why a predictive connect has no ring on the agent side. The cost of
+that model is real and worth stating: the agent's phone is in a call for their
+whole shift. Only agents on automatic campaigns are parked — MANUAL/PREVIEW
+agents keep the phase-3 behaviour of a call per dial.
+
+**Pacing** (`pacing.go`) is pure arithmetic over a `Pace` value, and is the one
+part of the dialer covered by tests (`pacing_test.go`, 13 cases) because it
+decides how many strangers' phones ring. The rules bind in order: agent-driven
+methods never dial; no free agent means no calls; **the abandoned-call rate is a
+hard brake** — at the ceiling the engine stops opening lines entirely; then
+target = agents × level, minus what is already ringing, capped at one new line
+per agent per tick so a burst cannot outrun the feedback. `ADAPT_*` derives the
+level from the measured answer rate (1/rate), floored at the configured level
+and capped by `adaptive_max`; `ADAPT_TAPERED` additionally eases back from half
+the ceiling upward instead of running flat out until the brake slams on. Rates
+are measured over 30 minutes and ignored below `dialer.MinSample` (20 calls), so
+noise cannot trip the brake or swing the level.
+
+**The drop-rate denominator is answered calls, not placed calls.** A number that
+rang out was never a person to abandon; using placed calls would flatter the
+rate by exactly the factor that matters. Only `placed_by='auto'` rows count — an
+agent's manual dial is not something the governor caused.
+
+**Compliance.** DNC was pulled forward from P6: a machine that cannot check a
+suppression list must not dial. It is checked **twice** — once in the hopper
+filler's selection, and again in `placeCall` immediately before the originate,
+because a number can be added in the seconds between. Suppression is global or
+per-campaign: "never call me again" and "stop calling me about this" are
+different promises. Call-time windows remain P6.
+
+**Hopper selection is one SQL statement** (`Hopper.Fill`) covering campaign and
+list activity, list expiry, dialable statuses, already-queued, DNC, and the
+disposition's `recycle_after_sec` cool-off. Deliberately one statement: a check
+split between SQL and Go is a check a future code path can forget, and these are
+the rules that keep the dialer lawful.
+
+**Two flags, not one.** `tpbx_campaigns.active` means the operation exists and
+agents may work it; `dialer_running` means the machine is placing calls. A
+supervisor stops the dialer without retiring the campaign. Starting a dialer
+that cannot dial is refused with the reason (agent-driven method, no trunk,
+paused), and `GET /campaigns/{id}/dialer` reports `blockedBy` in words —
+with the abandon brake ranked **above** staffing, since it persists however many
+agents sign in.
+
+**Untested here:** the ARI call flow itself (originate → Stasis → bridge) needs a
+live Asterisk and cannot be exercised in the dev container. What *is* verified
+against PostgreSQL is everything else: hopper selection and all its rules, DNC
+both ways, the recycle cool-off, dialer start guards, stop-and-purge, the rate
+arithmetic, and `blockedBy` priority.
 
 ## Console version & header
 

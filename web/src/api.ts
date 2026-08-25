@@ -473,6 +473,7 @@ export interface Campaign {
   trunk: string;
   wrapupSeconds: number;
   script: string;
+  dialerRunning: boolean;
 
   listCount: number;
   leadCount: number;
@@ -633,6 +634,99 @@ export async function nextPreviewLead(campaignId: number): Promise<{ lead: Lead 
   const r = await fetch(`/api/campaigns/${campaignId}/next-lead`);
   if (!r.ok) throw new Error(`next lead ${r.status}`);
   return r.json();
+}
+
+// --- Dialer engine + Do-Not-Call (parity phase 4) ----------------------------
+
+export interface ReadyAgent {
+  agentId: number;
+  username: string;
+  extension: string;
+  since: string;
+}
+
+export interface CampaignCalls {
+  placed: number;
+  answered: number;
+  dropped: number;
+  live: number;
+}
+
+export interface DialerStatus {
+  campaignId: number;
+  code: string;
+  running: boolean;
+  dialMethod: string;
+  automatic: boolean;
+  hopperDepth: number;
+  hopperLevel: number;
+  readyAgents: ReadyAgent[];
+  recent: CampaignCalls;
+  answerRate: number;
+  dropRate: number;
+  dropCeiling: number;
+  // blockedBy explains, in words, why a started dialer is not placing calls.
+  blockedBy: string;
+  measuredOver: string;
+}
+
+export interface HopperEntry {
+  id: number;
+  leadId: number;
+  priority: number;
+  state: string;
+  phoneNumber: string;
+  leadName: string;
+}
+
+export interface DNCEntry {
+  id: number;
+  phoneNumber: string;
+  campaignId: number | null; // null = global
+  reason: string;
+  addedBy: string;
+  createdAt: string;
+}
+
+export async function getDialerStatus(campaignId: number): Promise<DialerStatus> {
+  const r = await fetch(`/api/campaigns/${campaignId}/dialer`);
+  if (!r.ok) throw new Error(`dialer ${r.status}`);
+  return r.json();
+}
+
+export function setDialerRunning(campaignId: number, running: boolean): Promise<any> {
+  return request("PUT", `/api/campaigns/${campaignId}/dialer`, { running });
+}
+
+export async function listHopper(campaignId: number): Promise<HopperEntry[]> {
+  const r = await fetch(`/api/campaigns/${campaignId}/hopper`);
+  if (!r.ok) throw new Error(`hopper ${r.status}`);
+  return (await r.json()).hopper ?? [];
+}
+
+export function purgeHopper(campaignId: number): Promise<{ cleared: number }> {
+  return request("DELETE", `/api/campaigns/${campaignId}/hopper`);
+}
+
+export async function listDNC(campaignId = 0, q = ""): Promise<DNCEntry[]> {
+  const p = new URLSearchParams();
+  if (campaignId) p.set("campaign", String(campaignId));
+  if (q) p.set("q", q);
+  const r = await fetch(`/api/dnc?${p.toString()}`);
+  if (!r.ok) throw new Error(`dnc ${r.status}`);
+  return (await r.json()).dnc ?? [];
+}
+
+export function addDNC(input: {
+  phoneNumber: string;
+  campaignId?: number | null;
+  reason?: string;
+}): Promise<DNCEntry> {
+  return request("POST", "/api/dnc", input);
+}
+
+export function removeDNC(id: number): Promise<any> {
+  return request("DELETE", `/api/dnc/${id}`);
 }
 
 // --- Transports / TLS -------------------------------------------------------

@@ -40,10 +40,21 @@ type LeadCall struct {
 	EndedAt    string `json:"endedAt,omitempty"`
 	Status     string `json:"status,omitempty"` // disposition code, once given
 	Note       string `json:"note,omitempty"`
+	// PlacedBy separates engine-placed calls from agent-placed ones, so the
+	// drop rate is computed over automatic dialing only. "agent" | "auto".
+	PlacedBy string `json:"placedBy,omitempty"`
 
 	// Filled for display.
 	LeadName  string `json:"leadName,omitempty"`
 	LeadPhone string `json:"leadPhone,omitempty"`
+}
+
+// orDefaultStr returns v, or def when v is empty.
+func orDefaultStr(v, def string) string {
+	if strings.TrimSpace(v) == "" {
+		return def
+	}
+	return v
 }
 
 // Start records a new attempt and bumps the lead's call counters, so
@@ -64,9 +75,10 @@ func (s *LeadCalls) Start(ctx context.Context, c LeadCall) (LeadCall, error) {
 
 	var started time.Time
 	err = tx.QueryRow(ctx, `
-		INSERT INTO tpbx_lead_calls (lead_id, campaign_id, agent, extension, direction, channel_id, dialed)
-		VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id, started_at`,
-		c.LeadID, c.CampaignID, c.Agent, c.Extension, c.Direction, c.ChannelID, c.Dialed).
+		INSERT INTO tpbx_lead_calls (lead_id, campaign_id, agent, extension, direction, channel_id, dialed, placed_by)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id, started_at`,
+		c.LeadID, c.CampaignID, c.Agent, c.Extension, c.Direction, c.ChannelID, c.Dialed,
+		orDefaultStr(c.PlacedBy, "agent")).
 		Scan(&c.ID, &started)
 	if err != nil {
 		if strings.Contains(err.Error(), "violates foreign key") {
@@ -251,4 +263,61 @@ func (s *LeadCalls) NextPreviewLead(ctx context.Context, campaignID int64) (int6
 		return 0, ErrNotFound
 	}
 	return id, err
+}
+
+// --- Dialer outcomes ---------------------------------------------------------
+//
+// The engine records a call's life in three steps — placed, answered, finished —
+// because it learns each fact at a different moment and must not wait for the
+// last one to record the first.
+
+// CallOutcome is how an engine-placed call ended.
+type CallOutcome struct {
+	Status  string // disposition code, or NA/FAILED/DROP for outcomes with no agent
+	Dropped bool   // answered by a person with nobody to hand them to
+	AMD     string // machine-detection result, when enabled
+}
+
+// MarkAnswered records that a person picked up and which agent got the call.
+// talk time is measured from here, not from when the call was placed: the
+// ringing is not conversation.
+func (s *LeadCalls) MarkAnswered(ctx context.Context, callID, agentID int64) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE tpbx_lead_calls
+		   SET answered_at = COALESCE(answered_at, now()),
+		       agent = COALESCE(NULLIF(agent,''), (SELECT username FROM tpbx_agents WHERE id=$2))
+		 WHERE id=$1`, callID, agentID)
+	return err
+}
+
+// Finish closes a call with an outcome, filling in talk time from the answer.
+func (s *LeadCalls) Finish(ctx context.Context, callID int64, out CallOutcome) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE tpbx_lead_calls
+		   SET ended_at = COALESCE(ended_at, now()),
+		       status = CASE WHEN $2 = '' THEN status ELSE $2 END,
+		       dropped = dropped OR $3,
+		       amd_result = CASE WHEN $4 = '' THEN amd_result ELSE $4 END,
+		       talk_seconds = CASE
+		           WHEN answered_at IS NULL THEN 0
+		           ELSE GREATEST(0, EXTRACT(EPOCH FROM (COALESCE(ended_at, now()) - answered_at))::int)
+		       END
+		 WHERE id=$1`, callID, out.Status, out.Dropped, out.AMD)
+	return err
+}
+
+// FinishIfOpen closes a call that nobody dispositioned — the customer never
+// answered, or hung up before an agent took it. A call an agent already
+// dispositioned is left exactly as they left it.
+func (s *LeadCalls) FinishIfOpen(ctx context.Context, callID int64, status string) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE tpbx_lead_calls
+		   SET ended_at = now(),
+		       status = CASE WHEN status = '' THEN $2 ELSE status END,
+		       talk_seconds = CASE
+		           WHEN answered_at IS NULL THEN 0
+		           ELSE GREATEST(0, EXTRACT(EPOCH FROM (now() - answered_at))::int)
+		       END
+		 WHERE id=$1 AND ended_at IS NULL`, callID, status)
+	return err
 }

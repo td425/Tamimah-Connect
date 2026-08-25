@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+  addDNC,
   automaticDialing,
   can,
+  getDialerStatus,
+  listDNC,
+  listHopper,
+  purgeHopper,
+  removeDNC,
+  setDialerRunning,
   createAgentAccount,
   createCampaign,
   deleteAgentAccount,
@@ -20,6 +27,9 @@ import {
   updateCampaign,
   type AgentAccount,
   type Campaign,
+  type DNCEntry,
+  type DialerStatus,
+  type HopperEntry,
   type Disposition,
   type Extension,
   type Lead,
@@ -47,6 +57,7 @@ const BLANK: Campaign = {
   trunk: "",
   wrapupSeconds: 0,
   script: "",
+  dialerRunning: false,
   listCount: 0,
   leadCount: 0,
   agentCount: 0,
@@ -61,7 +72,7 @@ const BLANK_AGENT: AgentAccount = {
   campaigns: [],
 };
 
-type Tab = "campaigns" | "dispositions" | "pause" | "agents";
+type Tab = "campaigns" | "dialer" | "dispositions" | "pause" | "agents" | "dnc";
 
 export default function Campaigns({ notify, me }: { notify: Notify; me: Me }) {
   const canCreate = can(me, "campaigns", "create");
@@ -120,9 +131,11 @@ export default function Campaigns({ notify, me }: { notify: Notify; me: Me }) {
         {(
           [
             ["campaigns", "Campaigns"],
+            ["dialer", "Dialer"],
             ["dispositions", "Dispositions"],
             ["pause", "Pause codes"],
             ["agents", "Agents"],
+            ["dnc", "Do-Not-Call"],
           ] as [Tab, string][]
         ).map(([key, label]) => (
           <button key={key} className={`tab ${tab === key ? "active" : ""}`} onClick={() => setTab(key)}>
@@ -167,8 +180,8 @@ export default function Campaigns({ notify, me }: { notify: Notify; me: Me }) {
                     <td>
                       <span className="badge">{c.dialMethod}</span>
                       {automaticDialing(c.dialMethod) && (
-                        <div className="dash-sub" title="Automatic pacing needs the dialer engine, which is not built yet">
-                          waiting for dialer
+                        <div className="dash-sub">
+                          {c.dialerRunning ? "dialer running" : "dialer stopped"}
                         </div>
                       )}
                     </td>
@@ -202,12 +215,18 @@ export default function Campaigns({ notify, me }: { notify: Notify; me: Me }) {
             </table>
           )}
           <p className="hint-inline" style={{ padding: "0 1rem 1rem" }}>
-            Manual and preview campaigns work today — dial a lead from the Leads page and record
-            what happened. The automatic methods (RATIO, ADAPT_*) are stored and validated here but
-            place no calls until the dialer engine ships.
+            Manual and preview campaigns are dialed by agents, from the Leads page or the agent
+            screen. The automatic methods (RATIO, ADAPT_*) are placed by the engine — start it on
+            the Dialer tab, where the abandoned-call rate that governs it is also shown.
           </p>
         </section>
       )}
+
+      {tab === "dialer" && (
+        <DialerPanel campaigns={campaigns} canEdit={canEdit} notify={notify} onChanged={refresh} />
+      )}
+
+      {tab === "dnc" && <DNCPanel campaigns={campaigns} canEdit={canEdit} canDelete={canDelete} notify={notify} />}
 
       {tab === "dispositions" && (
         <VocabPanel
@@ -997,5 +1016,364 @@ function AgentForm({
         </div>
       </div>
     </div>
+  );
+}
+
+// --- Dialer control ----------------------------------------------------------
+
+// DialerPanel is the supervisor's view of the engine: whether it is running,
+// what it is about to call, and the two rates that decide whether it may keep
+// dialing. The abandoned-call rate sits next to its ceiling deliberately — it
+// is the number that stops the dialer, and nobody should have to hunt for it.
+function DialerPanel({
+  campaigns,
+  canEdit,
+  notify,
+  onChanged,
+}: {
+  campaigns: Campaign[];
+  canEdit: boolean;
+  notify: Notify;
+  onChanged: () => void;
+}) {
+  const [campaignId, setCampaignId] = useState(campaigns[0]?.id ?? 0);
+  const [status, setStatus] = useState<DialerStatus | null>(null);
+  const [hopper, setHopper] = useState<HopperEntry[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  const refresh = useCallback(() => {
+    if (!campaignId) return;
+    getDialerStatus(campaignId).then(setStatus).catch(() => setStatus(null));
+    listHopper(campaignId).then(setHopper).catch(() => setHopper([]));
+  }, [campaignId]);
+
+  useEffect(refresh, [refresh]);
+
+  // The engine moves on a two-second tick; five seconds is enough to watch it
+  // work without hammering the API all day.
+  useEffect(() => {
+    const t = setInterval(refresh, 5000);
+    return () => clearInterval(t);
+  }, [refresh]);
+
+  const toggle = async () => {
+    if (!status) return;
+    setBusy(true);
+    try {
+      const res = await setDialerRunning(campaignId, !status.running);
+      notify({
+        kind: "ok",
+        text: res.running
+          ? "Dialer started."
+          : `Dialer stopped${res.hopperCleared ? `, ${res.hopperCleared} queued lead(s) cleared` : ""}.`,
+      });
+      refresh();
+      onChanged();
+    } catch (e) {
+      notify({ kind: "err", text: (e as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onPurge = async () => {
+    if (!confirm("Clear the queue? The filler rebuilds it on the next tick if the dialer is running.")) return;
+    try {
+      const res = await purgeHopper(campaignId);
+      notify({ kind: "ok", text: `Cleared ${res.cleared} queued lead(s).` });
+      refresh();
+    } catch (e) {
+      notify({ kind: "err", text: (e as Error).message });
+    }
+  };
+
+  if (campaigns.length === 0) {
+    return (
+      <section className="panel">
+        <header>Dialer</header>
+        <div className="empty">Create a campaign first.</div>
+      </section>
+    );
+  }
+
+  const atCeiling = status ? status.dropCeiling > 0 && status.dropRate >= status.dropCeiling : false;
+
+  return (
+    <section className="panel">
+      <header>Dialer</header>
+
+      <div className="form" style={{ paddingBottom: 0 }}>
+        <div className="form-row">
+          <label>
+            Campaign
+            <select value={campaignId} onChange={(e) => setCampaignId(parseInt(e.target.value, 10))}>
+              {campaigns.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.code} — {c.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          {canEdit && status && (
+            <label>
+              &nbsp;
+              <button
+                type="button"
+                className={`btn ${status.running ? "danger" : ""}`}
+                disabled={busy}
+                onClick={toggle}
+              >
+                {status.running ? "■ Stop dialer" : "▶ Start dialer"}
+              </button>
+            </label>
+          )}
+        </div>
+      </div>
+
+      {!status ? (
+        <div className="empty">Loading…</div>
+      ) : (
+        <>
+          <div className="cc-tiles">
+            <div className="cc-tile">
+              <div className="cc-tile-val">{status.running ? "RUNNING" : "STOPPED"}</div>
+              <div className="cc-tile-lbl">Engine · {status.dialMethod}</div>
+            </div>
+            <div className="cc-tile">
+              <div className="cc-tile-val">{status.readyAgents.length}</div>
+              <div className="cc-tile-lbl">Agents ready</div>
+            </div>
+            <div className="cc-tile">
+              <div className="cc-tile-val">
+                {status.hopperDepth}
+                <span className="cc-tile-lbl"> / {status.hopperLevel}</span>
+              </div>
+              <div className="cc-tile-lbl">Queued</div>
+            </div>
+            <div className="cc-tile">
+              <div className="cc-tile-val">{status.recent.live}</div>
+              <div className="cc-tile-lbl">Calls in flight</div>
+            </div>
+            <div className="cc-tile">
+              <div className="cc-tile-val">{Math.round(status.answerRate * 100)}%</div>
+              <div className="cc-tile-lbl">Answered ({status.measuredOver})</div>
+            </div>
+            <div className={`cc-tile ${atCeiling ? "small" : ""}`}>
+              <div className="cc-tile-val" style={atCeiling ? { color: "var(--amber, #e0a800)" } : undefined}>
+                {status.dropRate.toFixed(1)}%
+              </div>
+              <div className="cc-tile-lbl">
+                Abandoned · ceiling {status.dropCeiling}%
+              </div>
+            </div>
+          </div>
+
+          {status.blockedBy && (
+            <p className="hint-inline" style={{ padding: "0 1rem 0.5rem" }}>
+              <strong>Not dialing:</strong> {status.blockedBy}
+            </p>
+          )}
+
+          <p className="hint-inline" style={{ padding: "0 1rem 0.5rem" }}>
+            Placed {status.recent.placed} · answered {status.recent.answered} · abandoned{" "}
+            {status.recent.dropped} over the last {status.measuredOver}. The abandoned-call rate is a
+            hard limit: at the ceiling the engine stops opening lines until it recovers.
+          </p>
+
+          <div className="ivr-opts">
+            <div className="ivr-opts-head">
+              <span>Next to call ({hopper.length})</span>
+              {canEdit && (
+                <button type="button" className="btn ghost small" onClick={onPurge}>
+                  Clear queue
+                </button>
+              )}
+            </div>
+            {hopper.length === 0 ? (
+              <p className="hint-inline">Nothing queued.</p>
+            ) : (
+              <table>
+                <thead>
+                  <tr>
+                    <th>Phone</th>
+                    <th>Name</th>
+                    <th>State</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {hopper.slice(0, 20).map((h) => (
+                    <tr key={h.id}>
+                      <td className="mono-sm">{h.phoneNumber}</td>
+                      <td>{h.leadName || "—"}</td>
+                      <td>
+                        <span className={`badge ${h.state === "READY" ? "" : "offline"}`}>{h.state}</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
+// --- Do-Not-Call -------------------------------------------------------------
+
+function DNCPanel({
+  campaigns,
+  canEdit,
+  canDelete,
+  notify,
+}: {
+  campaigns: Campaign[];
+  canEdit: boolean;
+  canDelete: boolean;
+  notify: Notify;
+}) {
+  const [scope, setScope] = useState(0); // 0 = global + all
+  const [q, setQ] = useState("");
+  const [rows, setRows] = useState<DNCEntry[]>([]);
+  const [number, setNumber] = useState("");
+  const [reason, setReason] = useState("");
+  const [addScope, setAddScope] = useState(0);
+
+  const refresh = useCallback(() => {
+    listDNC(scope, q)
+      .then(setRows)
+      .catch((e) => notify({ kind: "err", text: (e as Error).message }));
+  }, [scope, q, notify]);
+
+  useEffect(refresh, [refresh]);
+
+  const add = async () => {
+    if (!number.trim()) return;
+    try {
+      await addDNC({ phoneNumber: number, campaignId: addScope || null, reason });
+      notify({ kind: "ok", text: `${number} will not be called again.` });
+      setNumber("");
+      setReason("");
+      refresh();
+    } catch (e) {
+      notify({ kind: "err", text: (e as Error).message });
+    }
+  };
+
+  const remove = async (e: DNCEntry) => {
+    if (!confirm(`Allow calls to ${e.phoneNumber} again?`)) return;
+    try {
+      await removeDNC(e.id);
+      notify({ kind: "ok", text: `${e.phoneNumber} removed from the list.` });
+      refresh();
+    } catch (err) {
+      notify({ kind: "err", text: (err as Error).message });
+    }
+  };
+
+  return (
+    <section className="panel">
+      <header>Do-Not-Call</header>
+      <p className="hint-inline" style={{ padding: "0 1rem" }}>
+        The dialer checks this list twice: when it queues a lead, and again in the moment before the
+        phone rings. A global entry blocks every campaign; a campaign entry blocks only that one —
+        "never call me again" and "stop calling me about this" are different promises.
+      </p>
+
+      {canEdit && (
+        <div className="form" style={{ paddingBottom: 0 }}>
+          <div className="form-row">
+            <label>
+              Number
+              <input value={number} placeholder="96899123456" onChange={(e) => setNumber(e.target.value)} />
+            </label>
+            <label>
+              Scope
+              <select value={addScope} onChange={(e) => setAddScope(parseInt(e.target.value, 10))}>
+                <option value={0}>Global — every campaign</option>
+                {campaigns.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.code} only
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Reason
+              <input value={reason} placeholder="asked not to be called" onChange={(e) => setReason(e.target.value)} />
+            </label>
+            <label>
+              &nbsp;
+              <button type="button" className="btn" onClick={add}>
+                Add
+              </button>
+            </label>
+          </div>
+        </div>
+      )}
+
+      <div className="form" style={{ paddingTop: 0, paddingBottom: 0 }}>
+        <div className="form-row">
+          <label>
+            Show
+            <select value={scope} onChange={(e) => setScope(parseInt(e.target.value, 10))}>
+              <option value={0}>Everything</option>
+              {campaigns.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.code} + global
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Search
+            <input value={q} placeholder="any part of the number" onChange={(e) => setQ(e.target.value)} />
+          </label>
+        </div>
+      </div>
+
+      {rows.length === 0 ? (
+        <div className="empty">No suppressed numbers.</div>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th>Number</th>
+              <th>Scope</th>
+              <th>Reason</th>
+              <th>Added by</th>
+              <th>When</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((e) => {
+              const camp = campaigns.find((c) => c.id === e.campaignId);
+              return (
+                <tr key={e.id}>
+                  <td className="mono-sm">{e.phoneNumber}</td>
+                  <td>
+                    <span className={`badge ${e.campaignId === null ? "" : "offline"}`}>
+                      {e.campaignId === null ? "global" : camp?.code ?? e.campaignId}
+                    </span>
+                  </td>
+                  <td>{e.reason || "—"}</td>
+                  <td>{e.addedBy || "—"}</td>
+                  <td>{new Date(e.createdAt).toLocaleDateString()}</td>
+                  <td className="row-action">
+                    {canDelete && (
+                      <button className="btn danger" onClick={() => remove(e)}>
+                        Remove
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </section>
   );
 }

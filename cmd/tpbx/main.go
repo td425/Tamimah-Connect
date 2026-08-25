@@ -19,6 +19,7 @@ import (
 	"github.com/td425/tpbx/internal/ari"
 	"github.com/td425/tpbx/internal/config"
 	"github.com/td425/tpbx/internal/db"
+	"github.com/td425/tpbx/internal/dialer"
 	"github.com/td425/tpbx/internal/migrate"
 	"github.com/td425/tpbx/internal/store"
 	"github.com/td425/tpbx/internal/ws"
@@ -143,9 +144,21 @@ func run() error {
 	hub := ws.NewHub()
 	ariClient := ari.New(cfg.ARI.BaseURL, cfg.ARI.Username, cfg.ARI.Password, cfg.ARI.AppName)
 
-	// Bridge Asterisk events into the browser hub. Both loops reconnect
-	// forever so a restart of Asterisk does not take the console down.
-	go runARIEvents(ctx, ariClient, hub)
+	work := store.NewAgentWork(database.Pool)
+	hopper := store.NewHopper(database.Pool)
+	leads := store.NewLeads(database.Pool)
+	leadCalls := store.NewLeadCalls(database.Pool)
+
+	// The outbound dialer. It runs in-process alongside the event loops and
+	// only acts on campaigns a supervisor has explicitly started, so a
+	// deployment that does no outbound dialing never notices it.
+	engine := dialer.New(ariClient, work, hopper, leads, leadCalls)
+	go engine.Run(ctx)
+
+	// Bridge Asterisk events into the browser hub, and into the dialer, which
+	// owns the channels it originated. Both loops reconnect forever so a
+	// restart of Asterisk does not take the console down.
+	go runARIEvents(ctx, ariClient, hub, engine)
 	go runAMIEvents(ctx, cfg, hub)
 
 	transports := store.NewTransports(database.Pool)
@@ -183,11 +196,12 @@ func run() error {
 		Routes:         store.NewRoutes(database.Pool),
 		IVRs:           store.NewIVRs(database.Pool),
 		Lists:          store.NewLists(database.Pool),
-		Leads:          store.NewLeads(database.Pool),
+		Leads:          leads,
 		Campaigns:      store.NewCampaigns(database.Pool),
 		AgentAccounts:  store.NewAgentAccounts(database.Pool),
-		LeadCalls:      store.NewLeadCalls(database.Pool),
-		Work:           store.NewAgentWork(database.Pool),
+		LeadCalls:      leadCalls,
+		Work:           work,
+		Hopper:         hopper,
 		Transports:     transports,
 		PJSIP:          pjsipSettings,
 		Users:          store.NewUsers(database.Pool),
@@ -321,7 +335,7 @@ func agentWebDir() string {
 
 // runARIEvents keeps a Stasis event subscription alive, forwarding each event
 // to the browser hub, and reconnects with backoff on failure.
-func runARIEvents(ctx context.Context, client *ari.Client, hub *ws.Hub) {
+func runARIEvents(ctx context.Context, client *ari.Client, hub *ws.Hub, engine *dialer.Engine) {
 	backoff := time.Second
 	for ctx.Err() == nil {
 		err := client.StreamEvents(ctx, func(ev ari.Event) {
@@ -329,6 +343,8 @@ func runARIEvents(ctx context.Context, client *ari.Client, hub *ws.Hub) {
 				"type": ev.Type,
 				"raw":  ev.Raw,
 			}})
+			// The dialer owns the channels it originated; it ignores the rest.
+			engine.HandleEvent(ctx, ev)
 		})
 		if ctx.Err() != nil {
 			return
