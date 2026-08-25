@@ -448,3 +448,111 @@
   font-family: var(--mono);
   white-space: nowrap;
 }
+
+/* --- Agent desk (campaign side of the softphone, parity phase 3) ----------- */
+
+.desk {
+  border-top: 1px solid var(--line);
+  margin-top: 0.75rem;
+  padding-top: 0.5rem;
+  font-size: 0.85rem;
+}
+
+.desk-notice {
+  padding: 0.4rem 0.6rem;
+  border-radius: 6px;
+  margin-bottom: 0.5rem;
+  background: color-mix(in srgb, var(--g) 18%, transparent);
+  color: var(--fg);
+}
+.desk-notice.err {
+  background: color-mix(in srgb, #d9534f 22%, transparent);
+}
+
+.desk-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.desk-who {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.1;
+  font-weight: 600;
+}
+
+.desk-sub {
+  font-weight: 400;
+  font-size: 0.75rem;
+  opacity: 0.7;
+}
+
+.desk-state {
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  font-weight: 700;
+}
+.desk-state.ready { background: color-mix(in srgb, var(--g) 30%, transparent); }
+.desk-state.paused { background: color-mix(in srgb, #e0a800 30%, transparent); }
+.desk-state.wrap { background: color-mix(in srgb, #6c8cff 30%, transparent); }
+
+.desk-btn {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--fg);
+  border-radius: 6px;
+  padding: 0.3rem 0.6rem;
+  cursor: pointer;
+  font: inherit;
+}
+.desk-btn:disabled { opacity: 0.45; cursor: default; }
+.desk-btn.go { border-color: var(--g); background: color-mix(in srgb, var(--g) 22%, transparent); }
+.desk-btn.on { background: color-mix(in srgb, var(--g) 35%, transparent); border-color: var(--g); }
+.desk-btn.wide { width: 100%; margin-top: 0.5rem; padding: 0.5rem; font-weight: 600; }
+
+.desk-campaign,
+.desk-pause,
+.desk-note,
+.desk-fields input,
+.desk-callback-form input,
+.desk-callback-form select {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--fg);
+  border-radius: 6px;
+  padding: 0.25rem 0.4rem;
+  font: inherit;
+}
+
+.desk-body { margin-top: 0.6rem; display: grid; gap: 0.6rem; }
+.desk-h { font-weight: 700; font-size: 0.78rem; letter-spacing: 0.04em; opacity: 0.85; margin-bottom: 0.3rem; }
+.desk-empty { text-align: center; opacity: 0.8; display: grid; gap: 0.5rem; justify-items: center; }
+
+.desk-callbacks { display: grid; gap: 0.25rem; }
+.desk-cb {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.3rem 0.5rem;
+  color: var(--fg);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.desk-numbers { display: flex; gap: 0.35rem; flex-wrap: wrap; margin-bottom: 0.5rem; }
+.desk-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 0.35rem; }
+.desk-fields label { display: grid; gap: 0.15rem; font-size: 0.72rem; opacity: 0.85; }
+
+.desk-script p { margin: 0; white-space: pre-wrap; line-height: 1.4; }
+.desk-dispo-grid { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+.desk-note { width: 100%; margin-top: 0.4rem; }
+.desk-callback-form { display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem; margin-top: 0.4rem; }
+.desk-callback-form label { display: grid; gap: 0.15rem; font-size: 0.72rem; opacity: 0.85; }

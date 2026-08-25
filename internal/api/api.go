@@ -39,6 +39,7 @@ type Server struct {
 	Campaigns      *store.Campaigns
 	AgentAccounts  *store.AgentAccounts
 	LeadCalls      *store.LeadCalls
+	Work           *store.AgentWork
 	Transports     *store.Transports
 	PJSIP          *store.PJSIPSettingsStore
 	Users          *store.Users
@@ -152,6 +153,19 @@ func (s *Server) Router() http.Handler {
 				r.Post("/telemetry", s.handleAgentTelemetry)
 				r.Get("/calls", s.handleAgentCalls)
 				r.Delete("/calls", s.handleAgentClearCalls)
+
+				// The agent desktop (phase 3). Every one of these resolves the
+				// agent from the session, never from the body, so an agent can
+				// only ever act as themselves.
+				r.Get("/session", s.handleAgentSession)
+				r.Get("/next-lead", s.handleAgentNextLead)
+				r.Get("/callbacks", s.handleAgentCallbacks)
+				r.Post("/campaign", s.handleAgentSetCampaign)
+				r.Post("/pause", s.handleAgentPause)
+				r.Post("/dial", s.handleAgentDial)
+				r.Post("/disposition", s.handleAgentDisposition)
+				r.Post("/lead", s.handleAgentUpdateLead)
+				r.Post("/take-lead", s.handleAgentTakeLead)
 			})
 		})
 

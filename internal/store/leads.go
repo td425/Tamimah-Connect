@@ -495,3 +495,109 @@ func (s *Leads) listFields(ctx context.Context, listID int64) ([]CustomField, er
 	}
 	return out, nil
 }
+
+// agentEditableFields are the lead fields an agent may correct from the agent
+// screen. Deliberately narrow: contact detail an agent hears on the call, never
+// the lead's list, dial state, or provenance — those are decided by the system
+// and by whoever loaded the data, not mid-call.
+var agentEditableFields = map[string]string{
+	"title":       "title",
+	"firstName":   "first_name",
+	"lastName":    "last_name",
+	"email":       "email",
+	"address1":    "address1",
+	"address2":    "address2",
+	"city":        "city",
+	"state":       "state",
+	"postalCode":  "postal_code",
+	"country":     "country",
+	"comments":    "comments",
+	"altPhone":    "alt_phone",
+	"altPhoneTwo": "alt_phone_two",
+}
+
+// UpdateFields applies a partial edit to a lead — ViciDial's update_fields, the
+// agent correcting a name or noting an address while the customer is on the
+// line. Unknown keys are ignored rather than rejected, so a client that knows
+// about a field this server does not cannot fail the whole save.
+//
+// Custom values are addressed as "custom.<name>" and are validated against the
+// list's schema, exactly as on a full update.
+func (s *Leads) UpdateFields(ctx context.Context, leadID int64, fields map[string]string) error {
+	if leadID <= 0 {
+		return ErrNotFound
+	}
+	var listID int64
+	if err := s.pool.QueryRow(ctx, `SELECT list_id FROM tpbx_leads WHERE id=$1`, leadID).Scan(&listID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	}
+
+	sets := []string{}
+	args := []any{leadID}
+	custom := map[string]any{}
+
+	for key, val := range fields {
+		if name, ok := strings.CutPrefix(key, "custom."); ok {
+			custom[name] = val
+			continue
+		}
+		col, ok := agentEditableFields[key]
+		if !ok {
+			continue
+		}
+		if col == "alt_phone" || col == "alt_phone_two" {
+			if strings.TrimSpace(val) != "" {
+				clean, err := CheckPhoneNumber(val)
+				if err != nil {
+					return err
+				}
+				val = clean
+			}
+		}
+		args = append(args, val)
+		sets = append(sets, fmt.Sprintf("%s=$%d", col, len(args)))
+	}
+
+	if len(custom) > 0 {
+		allowed, err := s.listFields(ctx, listID)
+		if err != nil {
+			return err
+		}
+		known := make(map[string]bool, len(allowed))
+		for _, f := range allowed {
+			known[f.Name] = true
+		}
+		keep := map[string]any{}
+		for k, v := range custom {
+			if known[k] {
+				keep[k] = v
+			}
+		}
+		if len(keep) > 0 {
+			raw, err := json.Marshal(keep)
+			if err != nil {
+				return err
+			}
+			args = append(args, raw)
+			// Merge rather than replace: an agent editing one field must not
+			// wipe the values they were not shown.
+			sets = append(sets, fmt.Sprintf("custom = custom || $%d::jsonb", len(args)))
+		}
+	}
+
+	if len(sets) == 0 {
+		return nil // nothing recognised; not an error
+	}
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE tpbx_leads SET `+strings.Join(sets, ", ")+`, updated_at=now() WHERE id=$1`, args...)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}

@@ -259,6 +259,7 @@ Migrations are plain SQL in `migrations/NNNN_name.sql`, embedded in the binary
 | 0025 | api_tokens | `tpbx_api_tokens` (hashed bearer tokens for `/api/v1`). |
 | 0026 | leads_lists | `tpbx_lists` + `tpbx_leads`, and the `leads` RBAC feature. See §20. |
 | 0027 | campaigns | `tpbx_campaigns`, `tpbx_dispositions`, `tpbx_pause_codes`, `tpbx_agents` (+ campaign assignments), `tpbx_lead_calls`; promotes `tpbx_lists.campaign_id` to a real reference; `campaigns` RBAC feature. See §21. |
+| 0028 | agent_desktop | `tpbx_agent_state` (live working state), `tpbx_agent_log` (append-only shift log), `tpbx_callbacks`. See §22. |
 
 Two families of tables:
 - **`ps_*`** — Asterisk's PJSIP realtime schema. XeloVoice writes rows; Asterisk
@@ -708,6 +709,57 @@ owns, agents as people, and agent-paced dialing.
   one dialable lead on demand rather than maintaining a queue, and applies no
   call-time or DNC rules (those are P6). Preview dialing is agent-paced, so a
   human sees every number first.
+
+## 22. The agent desktop (`store/agentwork.go`, `api/agentdesk.go`, `web/src/agent/AgentDesk.tsx`)
+
+Phase 3: the softphone stops being only a phone. `AgentDesk` renders *alongside*
+the dialer, and returns `null` when the agent works no campaigns — a deployment
+that does not use campaigns sees exactly the softphone it had before.
+
+- **Softphone authentication did not change.** Web, desktop and Android still
+  sign in with a SIP extension and its secret. What changed is that the login
+  now resolves to a `tpbx_agents` row, minting one on first sight
+  (`AgentAccounts.EnsureForExtension`), so an agent gains a persistent identity
+  with no client change. Provisioning is best-effort: a phone that can register
+  must never be blocked because the desk features could not be set up.
+- **`ByExtension` does not filter on `active`** — deliberately. Resolution
+  answers "who is this device?", and a disabled agent still has an answer.
+  Filtering there made a disabled account look absent, so provisioning tried to
+  recreate it and the agent was told their *extension already existed* rather
+  than that their account was disabled. Policy lives in `Server.agentAccount`,
+  which returns a 403 saying so.
+- **State is in the database** (`tpbx_agent_state`), not in memory: a shift
+  outlives a browser tab, a reconnecting softphone must land back where it was,
+  and the supervisor board (P8) reads the same row the agent sees. Agents start
+  **paused** — opening the app must never be enough to be handed a call.
+- **`tpbx_agent_log` is append-only.** Pairing consecutive rows gives
+  login/pause/talk durations, which is what P8's agent reporting is built from.
+  `handleAgentLogout` resolves the agent **from the token**, not the request
+  context: logout sits outside `requireAgent` (signing out must work with a
+  session the server no longer likes), so the context carries nothing there.
+- **Callbacks** (`tpbx_callbacks`) give the CALLBK disposition somewhere to
+  land. `recipient` separates ViciDial's two kinds: `ANYONE` returns the
+  callback to the campaign, `USERONLY` reserves it for the agent who promised
+  it — the difference between "we'll call you back" and "I'll call you back".
+  A time in the past is refused; a callback disposition with no time reports
+  that rather than dropping the promise; dispositioning a lead closes its
+  pending callbacks so a kept promise stops resurfacing.
+- **In-call edits are allowlisted.** `Leads.UpdateFields` accepts contact detail
+  only — never the list, dial state or provenance — and merges custom values
+  (`custom || $n`) rather than replacing, so editing one field cannot wipe the
+  ones the agent was not shown. Unknown keys are ignored rather than rejected,
+  so a client that knows a field this server does not cannot fail the save.
+- **Alt-phone dialing** is why a lead carries three numbers: `altPhone: "alt"`
+  or `"alt2"` dials those instead of the primary, each re-validated at dial time.
+- **Scripts** substitute `{firstName}`-style tokens from the lead. Unknown
+  tokens are left visible: a script with a typo should look wrong, not silently
+  read as a gap.
+
+A note on `callerIDName` (`store/agents.go`): it now understands the bare
+`Alice <1001>` form as well as the quoted one. The console's own Extensions
+form suggests the bare spelling, so softphones had been greeting agents by
+extension number instead of by name — and phase 3 would have persisted that
+into the agent record.
 
 ## Console version & header
 

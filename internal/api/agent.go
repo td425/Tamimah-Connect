@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"strconv"
@@ -107,15 +108,48 @@ func (s *Server) handleAgentLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+
+	// Resolve the device login to an agent identity, minting the account on
+	// first sight (phase 3). This is what lets an agent gain a persistent
+	// identity — campaigns, pause time, statistics — while every shipped
+	// softphone keeps signing in with an extension and its SIP secret.
+	// Best-effort: a phone that can register must never be blocked from
+	// registering because the desk features could not be set up.
+	agentUser := ""
+	if acct, err := s.AgentAccounts.EnsureForExtension(ctx, a.Extension, a.DisplayName); err == nil {
+		agentUser = acct.Username
+		_ = s.Work.Log(ctx, acct.Username, acct.Extension, 0, "login", "")
+	} else {
+		slog.Warn("agent account provisioning failed", "extension", a.Extension, "err", err)
+	}
+
 	http.SetCookie(w, s.agentCookie(r, token))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"extension":   a.Extension,
 		"displayName": a.DisplayName,
-		"token":       token, // for token-based clients (browser extension)
+		"agent":       agentUser, // "" when the desk features are unavailable
+		"token":       token,     // for token-based clients (browser extension)
 	})
 }
 
 func (s *Server) handleAgentLogout(w http.ResponseWriter, r *http.Request) {
+	// Close the shift before the session goes: the log is what the agent's
+	// time is reconstructed from, and a logout that leaves no mark reads as a
+	// still-open shift for the rest of the day.
+	//
+	// Logout is deliberately outside requireAgent — signing out must work even
+	// with a session the server no longer likes — so the agent is resolved from
+	// the token here rather than from the request context, which carries
+	// nothing on this route.
+	if ext, ok := s.Agents.LookupSession(r.Context(), agentToken(r)); ok && ext != "" {
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		if acct, err := s.AgentAccounts.ByExtension(ctx, ext); err == nil {
+			_ = s.Work.Log(ctx, acct.Username, acct.Extension, 0, "logout", "")
+			_ = s.Work.SetPaused(ctx, acct.ID, true, "LOGOUT")
+			_ = s.Work.SetCurrent(ctx, acct.ID, 0, 0)
+		}
+		cancel()
+	}
 	if c, err := r.Cookie(agentSessionCookie); err == nil {
 		s.Agents.DeleteSession(r.Context(), c.Value)
 	}

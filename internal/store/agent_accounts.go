@@ -98,10 +98,16 @@ func (s *AgentAccounts) Get(ctx context.Context, id int64) (AgentAccount, error)
 	return s.scanOne(ctx, `WHERE a.id = $1`, id)
 }
 
-// ByExtension resolves the agent currently bound to a SIP extension. Phase 3's
-// softphone login uses this to turn a device login into an agent identity.
+// ByExtension resolves the agent bound to a SIP extension. Phase 3's softphone
+// login uses this to turn a device login into an agent identity.
+//
+// It deliberately does NOT filter on `active`: resolution answers "who is this
+// device?", and a disabled agent still has an answer. Hiding them here made a
+// disabled account look absent, so EnsureForExtension tried to recreate it and
+// the agent was told their extension already existed instead of that their
+// account was disabled. Callers decide what a disabled agent may do.
 func (s *AgentAccounts) ByExtension(ctx context.Context, ext string) (AgentAccount, error) {
-	return s.scanOne(ctx, `WHERE a.extension = $1 AND a.active`, strings.TrimSpace(ext))
+	return s.scanOne(ctx, `WHERE a.extension = $1`, strings.TrimSpace(ext))
 }
 
 func (s *AgentAccounts) scanOne(ctx context.Context, where string, arg any) (AgentAccount, error) {
@@ -210,4 +216,47 @@ func setAgentCampaigns(ctx context.Context, tx pgx.Tx, agentID int64, campaigns 
 		}
 	}
 	return nil
+}
+
+// EnsureForExtension resolves the agent working from a SIP extension, creating
+// the account on first sight.
+//
+// This is what lets phase 3 give agents an identity without touching how any
+// softphone authenticates: the web, desktop and Android clients still sign in
+// with an extension and its SIP secret, and the first such login mints the
+// agent record behind it. An account that already exists is returned untouched,
+// so an administrator's naming and campaign assignments always win over the
+// auto-provisioned defaults.
+func (s *AgentAccounts) EnsureForExtension(ctx context.Context, ext, displayName string) (AgentAccount, error) {
+	ext = strings.TrimSpace(ext)
+	if ext == "" {
+		return AgentAccount{}, errors.New("an agent needs an extension")
+	}
+	if a, err := s.ByExtension(ctx, ext); err == nil {
+		return a, nil
+	} else if !errors.Is(err, ErrNotFound) {
+		return AgentAccount{}, err
+	}
+
+	// Auto-provisioned accounts are keyed by the extension, which is unique and
+	// already the name the operator knows this person by on the phone system.
+	a := AgentAccount{
+		Username:    "ext" + ext,
+		DisplayName: strings.TrimSpace(displayName),
+		Extension:   ext,
+		Active:      true,
+	}
+	if a.DisplayName == "" {
+		a.DisplayName = "Extension " + ext
+	}
+	created, err := s.Create(ctx, a)
+	if err == nil {
+		return created, nil
+	}
+	// Lost a race, or the username is taken by an account bound elsewhere.
+	// Re-resolving by extension covers the race; anything else is a real clash.
+	if a2, err2 := s.ByExtension(ctx, ext); err2 == nil {
+		return a2, nil
+	}
+	return AgentAccount{}, err
 }

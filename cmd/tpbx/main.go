@@ -187,6 +187,7 @@ func run() error {
 		Campaigns:      store.NewCampaigns(database.Pool),
 		AgentAccounts:  store.NewAgentAccounts(database.Pool),
 		LeadCalls:      store.NewLeadCalls(database.Pool),
+		Work:           store.NewAgentWork(database.Pool),
 		Transports:     transports,
 		PJSIP:          pjsipSettings,
 		Users:          store.NewUsers(database.Pool),
