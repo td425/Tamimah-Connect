@@ -23,7 +23,8 @@ import { IVRBuilder } from "./IVRBuilder";
 
 const DEST_TYPES: { value: IVRDestType; label: string }[] = [
   { value: "extension", label: "Ring extension" },
-  { value: "queue", label: "Ring agents (hold if busy)" },
+  { value: "ingroup", label: "Send to in-group (ACD queue)" },
+  { value: "queue", label: "Ring agents — hunt group, no ACD reporting" },
   { value: "external", label: "Call external / GSM" },
   { value: "ivr", label: "Go to sub-menu" },
   { value: "voicemail", label: "Voicemail" },
@@ -34,6 +35,7 @@ const DEST_TYPES: { value: IVRDestType; label: string }[] = [
 
 const DEST_LABEL: Record<IVRDestType, string> = {
   extension: "Ring ext.",
+  ingroup: "In-group",
   queue: "Ring agents",
   external: "Call GSM",
   ivr: "Sub-menu",

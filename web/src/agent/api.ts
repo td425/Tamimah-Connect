@@ -180,3 +180,25 @@ export async function deskCallbacks(): Promise<DeskCallback[]> {
 export function deskTakeLead(leadId: number): Promise<{ lead: DeskLead }> {
   return deskJSON("/api/agent/take-lead", { leadId });
 }
+
+// In-groups the agent takes calls for this shift (ViciDial's change_ingroups).
+// Permission is set by a supervisor; which of those they are actually on is
+// theirs to choose, and is live queue membership in Asterisk.
+
+export interface DeskIngroup {
+  ingroup: string;
+  description: string;
+  penalty: number;
+  selected: boolean;
+  paused: boolean;
+}
+
+export async function deskIngroups(): Promise<DeskIngroup[]> {
+  const d = await deskJSON("/api/agent/ingroups", undefined, "GET");
+  return d.ingroups ?? [];
+}
+
+export async function deskSetIngroups(ingroups: string[]): Promise<DeskIngroup[]> {
+  const d = await deskJSON("/api/agent/ingroups", { ingroups });
+  return d.ingroups ?? [];
+}

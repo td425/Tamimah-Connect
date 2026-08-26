@@ -41,6 +41,7 @@ type Server struct {
 	LeadCalls      *store.LeadCalls
 	Work           *store.AgentWork
 	Hopper         *store.Hopper
+	Ingroups       *store.Ingroups
 	Transports     *store.Transports
 	PJSIP          *store.PJSIPSettingsStore
 	Users          *store.Users
@@ -71,6 +72,12 @@ type Server struct {
 	// paths) that cannot safely move to the DB. It is displayed read-only and
 	// masked on the System settings tab; never editable from the UI.
 	Infra InfraInfo
+
+	// ReloadQueues asks Asterisk to re-read realtime queue membership. Injected
+	// by main so the api package stays decoupled from AMI. Nil when
+	// unavailable, in which case membership still takes effect on the next
+	// queue load — it is a nudge, not a requirement.
+	ReloadQueues func(context.Context) error
 
 	// RestartAsterisk performs a full Asterisk restart (to re-bind transports).
 	// Injected by main so the api package stays decoupled from AMI/config. Nil
@@ -167,6 +174,10 @@ func (s *Server) Router() http.Handler {
 				r.Post("/disposition", s.handleAgentDisposition)
 				r.Post("/lead", s.handleAgentUpdateLead)
 				r.Post("/take-lead", s.handleAgentTakeLead)
+
+				// In-groups the agent takes calls for this shift.
+				r.Get("/ingroups", s.handleAgentIngroups)
+				r.Post("/ingroups", s.handleAgentSetIngroups)
 			})
 		})
 
@@ -231,6 +242,14 @@ func (s *Server) Router() http.Handler {
 				r.Post("/routes/outbound", s.handleCreateOutbound)
 				r.Put("/routes/outbound/{id}", s.handleUpdateOutbound)
 				r.Delete("/routes/outbound/{id}", s.handleDeleteOutbound)
+				// In-groups: ACD queues an inbound route or IVR can point at.
+				r.Get("/ingroups", s.handleListIngroups)
+				r.Post("/ingroups", s.handleCreateIngroup)
+				r.Get("/ingroups/{name}", s.handleGetIngroup)
+				r.Put("/ingroups/{name}", s.handleUpdateIngroup)
+				r.Delete("/ingroups/{name}", s.handleDeleteIngroup)
+				r.Put("/ingroups/{name}/agents", s.handleSetIngroupAgents)
+
 				r.Get("/routes/inbound", s.handleListInbound)
 				r.Post("/routes/inbound", s.handleCreateInbound)
 				r.Put("/routes/inbound/{id}", s.handleUpdateInbound)

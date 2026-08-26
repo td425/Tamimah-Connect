@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   deskCallbacks,
   deskDial,
+  deskIngroups,
+  deskSetIngroups,
   deskDisposition,
   deskNextLead,
   deskPause,
@@ -10,6 +12,7 @@ import {
   deskTakeLead,
   deskUpdateLead,
   type DeskCallback,
+  type DeskIngroup,
   type DeskLead,
   type DeskSession,
 } from "./api";
@@ -43,6 +46,7 @@ export default function AgentDesk() {
   const [notice, setNotice] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [lead, setLead] = useState<DeskLead | null>(null);
   const [callbacks, setCallbacks] = useState<DeskCallback[]>([]);
+  const [ingroups, setIngroups] = useState<DeskIngroup[]>([]);
   const [busy, setBusy] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
 
@@ -85,6 +89,12 @@ export default function AgentDesk() {
     const t = setInterval(refreshCallbacks, 60000);
     return () => clearInterval(t);
   }, [refreshCallbacks]);
+
+  // Inbound in-groups. An agent with none permitted simply never sees the
+  // control, so an outbound-only deployment is unaffected.
+  useEffect(() => {
+    deskIngroups().then(setIngroups).catch(() => setIngroups([]));
+  }, []);
 
   useEffect(() => {
     if (wrapLeft <= 0) return;
@@ -254,6 +264,33 @@ export default function AgentDesk() {
 
       {!collapsed && (
         <div className="desk-body">
+          {ingroups.length > 0 && (
+            <div className="desk-ingroups">
+              <div className="desk-h">Taking calls for</div>
+              <div className="desk-dispo-grid">
+                {ingroups.map((g) => (
+                  <button
+                    key={g.ingroup}
+                    className={`desk-btn ${g.selected ? "on" : ""}`}
+                    disabled={busy}
+                    title={g.description || g.ingroup}
+                    onClick={() =>
+                      run(async () => {
+                        const next = ingroups
+                          .filter((x) => (x.ingroup === g.ingroup ? !x.selected : x.selected))
+                          .map((x) => x.ingroup);
+                        setIngroups(await deskSetIngroups(next));
+                        notify("ok", g.selected ? `Left ${g.ingroup}` : `Now taking ${g.ingroup} calls`);
+                      })
+                    }
+                  >
+                    {g.ingroup}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           {callbacks.length > 0 && (
             <div className="desk-callbacks">
               <div className="desk-h">Callbacks due ({callbacks.length})</div>

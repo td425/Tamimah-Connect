@@ -556,3 +556,5 @@
 .desk-note { width: 100%; margin-top: 0.4rem; }
 .desk-callback-form { display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem; margin-top: 0.4rem; }
 .desk-callback-form label { display: grid; gap: 0.15rem; font-size: 0.72rem; opacity: 0.85; }
+
+.desk-ingroups { display: grid; gap: 0.25rem; }

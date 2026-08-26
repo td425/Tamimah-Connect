@@ -30,16 +30,26 @@ It's wired to write into Postgres in real time:
 No file parsing, no cron — it's live.
 
 ## What you must have for the numbers to populate
-- **Use Asterisk queues** (`app_queue`) for inbound distribution — callers enter
-  a queue and are handed to agents. The "Process" entries are your queue names.
-- Point inbound routes at `Queue(<name>)` in the dialplan. Each queue's members
-  are your agents' extensions.
-- After deploying, place a few queued test calls; the dashboard fills in.
+Build an **in-group** on the In-Groups page and point an inbound route (or an
+IVR key) at it. That is all — an in-group *is* an Asterisk queue, so calls
+through one write `queue_log` and the dashboard fills in.
+
+- The "Process" entries are your in-group names.
+- Agents choose which of their permitted in-groups they are taking from their
+  own screen; a supervisor sets who is permitted, on the In-Groups page.
+- After deploying, place a few test calls into an in-group.
+
+> **Before phase 5** this had to be done by hand — the console's "Ring agents"
+> action compiled to a `Dial()` retry loop, which is not `app_queue` and writes
+> no `queue_log`, so a GUI-built queue produced no numbers at all and this page
+> told you to hand-write `Queue()` in the dialplan. That action still exists as
+> a plain hunt group, and still reports nothing; use an in-group for anything
+> that should appear here.
 
 ## Tuning
-- **Service-level threshold (SLA):** defaults to **20s**. Override per request
-  with `?sla=<seconds>` on `/api/analytics/overview` (a global setting can be
-  added on request).
+- **Service-level threshold (SLA):** defaults to **20s**, settable globally on
+  the System settings tab and per in-group (its `servicelevel`). Override per
+  request with `?sla=<seconds>` on `/api/analytics/overview`.
 - **Windows:** the top-bar day selector drives the reporting window; live tiles
   (In Queue / Talking / Agent Status) refresh every 15s.
 
@@ -57,8 +67,8 @@ No file parsing, no cron — it's live.
 | In Queue / Talking (live) | open `ENTERQUEUE` / `CONNECT` sessions with no terminal event |
 | Dropped in IVR | inbound CDR, not answered, never entered a queue (best-effort) |
 
-`In IVR` and `Transferring` live tiles are placeholders (0) until a dialplan/AMI
-feed is added — everything else is live from `queue_log` + CDR + ARI.
+`In IVR` and `Transferring` are live, as is everything else here, from
+`queue_log` + CDR + ARI.
 
 ## Bring-your-own-softphone
 Because these come from Asterisk, agents can use **any** SIP client (Zoiper,

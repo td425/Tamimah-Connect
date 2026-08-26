@@ -156,6 +156,13 @@ func (s *Server) handleAgentPause(w http.ResponseWriter, r *http.Request) {
 		event = "pause"
 	}
 	_ = s.Work.Log(ctx, acct.Username, acct.Extension, campaign, event, body.Code)
+
+	// The desk's pause state and the agent's ACD availability must not
+	// disagree: an agent who stepped away should not still be rung by a queue.
+	if s.Ingroups != nil {
+		_ = s.Ingroups.SetPaused(ctx, acct.Extension, body.Paused)
+		s.reloadQueueMembers(ctx)
+	}
 	writeJSON(w, http.StatusOK, state)
 }
 

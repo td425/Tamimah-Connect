@@ -32,7 +32,8 @@ type Edges = Record<string, string>; // portKey -> nodeId
 
 const PALETTE: { kind: Kind; label: string; icon: string }[] = [
   { kind: "extension", label: "Ring extension", icon: "☎" },
-  { kind: "queue", label: "Ring agents (hold if busy)", icon: "⏳" },
+  { kind: "ingroup", label: "In-group (ACD queue)", icon: "⑃" },
+  { kind: "queue", label: "Ring agents (hunt group)", icon: "⏳" },
   { kind: "external", label: "Call external / GSM", icon: "📱" },
   { kind: "ivr", label: "Sub-menu", icon: "▤" },
   { kind: "voicemail", label: "Voicemail", icon: "✉" },
@@ -42,7 +43,8 @@ const PALETTE: { kind: Kind; label: string; icon: string }[] = [
 ];
 const KIND_LABEL: Record<Kind, string> = {
   extension: "Ring extension",
-  queue: "Ring agents (hold)",
+  ingroup: "In-group",
+  queue: "Ring agents (hunt)",
   external: "Call external / GSM",
   ivr: "Sub-menu",
   voicemail: "Voicemail",

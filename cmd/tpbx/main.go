@@ -202,6 +202,7 @@ func run() error {
 		LeadCalls:      leadCalls,
 		Work:           work,
 		Hopper:         hopper,
+		Ingroups:       store.NewIngroups(database.Pool),
 		Transports:     transports,
 		PJSIP:          pjsipSettings,
 		Users:          store.NewUsers(database.Pool),
@@ -241,6 +242,13 @@ func run() error {
 			PJSIPFile:      cfg.PJSIPFile,
 			SoundsDir:      cfg.SoundsDir,
 			WSSPort:        cfg.WebRTC.WSSPort,
+		},
+		// Realtime queue membership is already live in the database; this only
+		// asks app_queue to notice sooner.
+		ReloadQueues: func(ctx context.Context) error {
+			_, err := ami.Exec(ctx, cfg.AMI.Addr, cfg.AMI.Username, cfg.AMI.Password,
+				cfg.AMI.Timeout, "queue reload members")
+			return err
 		},
 		RestartAsterisk: func(ctx context.Context) error {
 			_, err := ami.Exec(ctx, cfg.AMI.Addr, cfg.AMI.Username, cfg.AMI.Password,

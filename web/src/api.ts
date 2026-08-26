@@ -729,6 +729,68 @@ export function removeDNC(id: number): Promise<any> {
   return request("DELETE", `/api/dnc/${id}`);
 }
 
+// --- In-groups (ACD queues, parity phase 5) ----------------------------------
+
+export interface Ingroup {
+  name: string;
+  description: string;
+  active: boolean;
+  strategy: string;
+  musicOnHold: string;
+  announce: string;
+  ringTimeout: number;
+  wrapupTime: number;
+  maxCallers: number;
+  serviceLevel: number;
+  joinEmpty: string;
+  leaveWhenEmpty: string;
+  announcePosition: string;
+  periodicAnnounce: string;
+  periodicAnnounceFrequency: number;
+  dropAction: string;
+  maxWait: number;
+  memberCount: number;
+  allowedCount: number;
+}
+
+export interface IngroupAgent {
+  agentId: number;
+  username: string;
+  displayName: string;
+  extension: string;
+  penalty: number;
+  loggedIn: boolean;
+  paused: boolean;
+}
+
+export async function listIngroups(): Promise<{ ingroups: Ingroup[]; strategies: string[] }> {
+  const r = await fetch("/api/ingroups");
+  if (!r.ok) throw new Error(`ingroups ${r.status}`);
+  return r.json();
+}
+
+export async function getIngroup(name: string): Promise<{ ingroup: Ingroup; agents: IngroupAgent[] }> {
+  const r = await fetch(`/api/ingroups/${encodeURIComponent(name)}`);
+  if (!r.ok) throw new Error(`ingroup ${r.status}`);
+  return r.json();
+}
+
+export function createIngroup(g: Partial<Ingroup>): Promise<any> {
+  return request("POST", "/api/ingroups", g);
+}
+
+export function updateIngroup(name: string, g: Partial<Ingroup>): Promise<any> {
+  return request("PUT", `/api/ingroups/${encodeURIComponent(name)}`, g);
+}
+
+export function deleteIngroup(name: string): Promise<any> {
+  return request("DELETE", `/api/ingroups/${encodeURIComponent(name)}`);
+}
+
+export function setIngroupAgents(name: string, agents: Partial<IngroupAgent>[]): Promise<any> {
+  return request("PUT", `/api/ingroups/${encodeURIComponent(name)}/agents`, { agents });
+}
+
 // --- Transports / TLS -------------------------------------------------------
 
 export interface Transport {
@@ -816,6 +878,7 @@ export type IVRDestType =
   | "playback"
   | "external"
   | "queue"
+  | "ingroup"
   | "repeat"
   | "hangup";
 

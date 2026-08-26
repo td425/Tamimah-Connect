@@ -261,6 +261,7 @@ Migrations are plain SQL in `migrations/NNNN_name.sql`, embedded in the binary
 | 0027 | campaigns | `tpbx_campaigns`, `tpbx_dispositions`, `tpbx_pause_codes`, `tpbx_agents` (+ campaign assignments), `tpbx_lead_calls`; promotes `tpbx_lists.campaign_id` to a real reference; `campaigns` RBAC feature. See §21. |
 | 0028 | agent_desktop | `tpbx_agent_state` (live working state), `tpbx_agent_log` (append-only shift log), `tpbx_callbacks`. See §22. |
 | 0029 | dialer | `tpbx_hopper`, `tpbx_dnc`, outcome columns on `tpbx_lead_calls`, `tpbx_campaigns.dialer_running`. See §23. |
+| 0030 | ingroups | `queues` + `queue_members` (Asterisk realtime ACD), `tpbx_ingroups`, `tpbx_ingroup_agents`. See §24. |
 
 Two families of tables:
 - **`ps_*`** — Asterisk's PJSIP realtime schema. XeloVoice writes rows; Asterisk
@@ -826,6 +827,41 @@ live Asterisk and cannot be exercised in the dev container. What *is* verified
 against PostgreSQL is everything else: hopper selection and all its rules, DNC
 both ways, the recycle cool-off, dialer start guards, stop-and-purge, the rate
 arithmetic, and `blockedBy` priority.
+
+## 24. In-groups — real ACD (`store/ingroups.go`, `api/ingroups.go`)
+
+Phase 5, and the fix for the reporting gap this index and the parity plan both
+documented: the console's `queue` action compiled to a `While`/`Dial()` retry
+loop, **not** `app_queue` — and only app_queue writes `queue_log`, which is what
+every call-center metric is computed from. A GUI-built queue produced no numbers
+at all.
+
+- **`ingroup` is a new destination type** that compiles to `Queue(NAME,tTn,,,<maxWait>)`,
+  optionally followed by a give-up destination in the same `type:value` encoding
+  the inbound routes use. Available on inbound routes, IVR keys and IVR
+  fallbacks. The old `queue` action is untouched and still works — it is now
+  labelled a hunt group in the UI, because that is what it is.
+- **Asterisk's own tables are the storage** (DEEP_INDEX §2's rule): `queues` and
+  `queue_members` are realtime, mapped in `extconfig.conf`, so creating an
+  in-group or an agent joining one takes effect with **no file and no reload**.
+  What Asterisk has no column for — description, the give-up destination — sits
+  beside it in `tpbx_ingroups`.
+- **Permission and attendance are different things.** `tpbx_ingroup_agents` says
+  who *may* take an in-group's calls (with a penalty, which is how skill tiers
+  are expressed); a row in `queue_members` says who *is*, right now. An agent
+  picks from their permitted set on their own screen (ViciDial's
+  `change_ingroups`); asking for one they are not permitted is refused, not
+  ignored. Withdrawing permission also drops live membership — permission
+  withdrawn mid-shift has to stop the calls, not just the paperwork.
+- **Desk state and ACD state cannot disagree.** Pausing at the desk pauses the
+  agent in every queue; going ready un-pauses; logging out removes them from all
+  of them. An ACD must never ring a phone nobody is sitting at.
+- `Server.ReloadQueues` (AMI `queue reload members`) is a **nudge, not a
+  requirement**: the database is already correct, this only makes app_queue
+  notice sooner. Nil when AMI is unavailable, and the code says so.
+- Generation is covered by tests (`ingroup_gen_test.go`) — including one that
+  asserts an in-group compiles to `Queue(` and *not* to `Dial(`/`While(`, which
+  is the regression that started this phase.
 
 ## Console version & header
 

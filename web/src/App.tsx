@@ -18,6 +18,7 @@ import Dashboard from "./components/Dashboard";
 import Extensions from "./components/Extensions";
 import Trunks from "./components/Trunks";
 import Routing from "./components/Routing";
+import Ingroups from "./components/Ingroups";
 import IVRPage from "./components/IVR";
 import Leads from "./components/Leads";
 import CampaignsPage from "./components/Campaigns";
@@ -39,6 +40,7 @@ const NAV: { key: string; label: string; ready: boolean; feature?: Feature }[] =
   { key: "extensions", label: "Extensions", ready: true, feature: "extensions" },
   { key: "trunks", label: "Trunks", ready: true, feature: "trunks" },
   { key: "routing", label: "Routing", ready: true, feature: "routing" },
+  { key: "ingroups", label: "In-Groups", ready: true, feature: "routing" },
   { key: "ivr", label: "IVR", ready: true, feature: "ivr" },
   { key: "leads", label: "Leads", ready: true, feature: "leads" },
   { key: "campaigns", label: "Campaigns", ready: true, feature: "campaigns" },
@@ -271,6 +273,8 @@ function Console({
           <Trunks notify={notify} me={me} />
         ) : allowedView === "routing" ? (
           <Routing notify={notify} me={me} />
+        ) : allowedView === "ingroups" ? (
+          <Ingroups notify={notify} me={me} />
         ) : allowedView === "ivr" ? (
           <IVRPage notify={notify} me={me} />
         ) : allowedView === "leads" ? (

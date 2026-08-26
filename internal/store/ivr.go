@@ -336,6 +336,8 @@ func ivrActionLines(destType, destValue, menu string) []string {
 		return externalDialLines(destValue)
 	case "queue":
 		return queueDialLines(destValue)
+	case "ingroup":
+		return ingroupLines(destValue)
 	case "hangup":
 		return []string{"Hangup()"}
 	default: // extension
@@ -346,6 +348,48 @@ func ivrActionLines(destType, destValue, menu string) []string {
 	}
 }
 
+// ingroupLines sends the caller into a real ACD queue served by Asterisk's
+// app_queue — a skill-based in-group (docs/VICIDIAL_PARITY.md, phase 5).
+//
+// This is what the neighbouring `queue` action should have been. That one rings
+// a list of extensions in a loop, which works but is invisible: **only
+// app_queue writes the queue_log table**, and every call-center metric on the
+// Overview dashboard is computed from queue_log. A call through a ring group
+// produces no Service Level, no Offered/Handled/Abandoned, nothing. A call
+// through an in-group is a call the dashboard can see.
+//
+// The value is "<INGROUP>" or "<INGROUP>;<maxWaitSeconds>;<dropAction>". The
+// queue's own settings (strategy, timeouts, announcements, members) live in
+// Asterisk's realtime tables and are edited in the console, so nothing about
+// them is baked into this dialplan.
+//
+// Queue() options used: `t` and `T` let either party transfer, and `n` stops
+// app_queue retrying members past the caller's patience. The give-up
+// destination runs when the queue returns — which happens on timeout, on an
+// empty queue, or when the caller presses out.
+func ingroupLines(value string) []string {
+	name, rest, _ := strings.Cut(strings.TrimSpace(value), ";")
+	name = sanitizeField(strings.ToUpper(strings.TrimSpace(name)))
+	if name == "" {
+		return []string{"Hangup()"}
+	}
+	maxWait, dropAction, _ := strings.Cut(rest, ";")
+	maxWait = strings.TrimSpace(maxWait)
+	if maxWait == "" || maxWait == "0" {
+		maxWait = "" // wait as long as the caller is willing to
+	}
+
+	lines := []string{
+		"Answer()",
+		fmt.Sprintf("Queue(%s,tTn,,,%s)", name, maxWait),
+	}
+	// Whatever the queue could not do, the give-up destination does.
+	if d := strings.TrimSpace(dropAction); d != "" && d != "hangup" {
+		lines = append(lines, ivrDestLines(d)...)
+	}
+	return append(lines, "Hangup()")
+}
+
 // queueMaxTries / queueRing bound the "hold if busy" loop: how many times to
 // re-offer the call and how long each ring attempt lasts.
 const (
@@ -353,9 +397,14 @@ const (
 	queueRing     = 20
 )
 
-// queueDialLines implements a lightweight queue: ring the agent(s); if none
+// queueDialLines implements a lightweight ring group: ring the agent(s); if none
 // answer, play a "please hold, all agents are busy" prompt and try again, up to
-// queueMaxTries. The value is "<targets>;<holdprompt>" where targets is one or
+// queueMaxTries.
+//
+// NOTE: this is not an ACD queue and produces no call-center reporting — see
+// ingroupLines above, which is what to use for anything that should appear on
+// the dashboard. This is kept for the deployments already using it, and for the
+// case where a simple hunt group is genuinely all that is wanted. The value is "<targets>;<holdprompt>" where targets is one or
 // more extensions separated by & (ring all at once) and holdprompt is optional.
 // Uses While/EndWhile (app_while, loaded by default) so no labels are needed,
 // which keeps it usable as an option, a fallback, and an inbound destination.
@@ -453,6 +502,8 @@ func ivrDestLines(dest string) []string {
 		return externalDialLines(v)
 	case "queue":
 		return queueDialLines(v)
+	case "ingroup":
+		return ingroupLines(v)
 	case "hangup":
 		return []string{"Hangup()"}
 	default:
@@ -462,7 +513,7 @@ func ivrDestLines(dest string) []string {
 
 func destType(t string) string {
 	switch t {
-	case "ivr", "hangup", "extension", "voicemail", "playback", "repeat", "external", "queue":
+	case "ivr", "hangup", "extension", "voicemail", "playback", "repeat", "external", "queue", "ingroup":
 		return t
 	default:
 		return "extension"

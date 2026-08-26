@@ -6,6 +6,7 @@ import {
   deleteOutboundRoute,
   listInboundRoutes,
   listIVRs,
+  listIngroups,
   listOutboundRoutes,
   listSounds,
   listTrunks,
@@ -51,6 +52,7 @@ export default function Routing({ notify, me }: { notify: Notify; me: Me }) {
   const [inbound, setInbound] = useState<InboundRoute[]>([]);
   const [trunks, setTrunks] = useState<Trunk[]>([]);
   const [ivrs, setIvrs] = useState<IVR[]>([]);
+  const [ingroups, setIngroups] = useState<string[]>([]);
   const [sounds, setSounds] = useState<SoundFile[]>([]);
   const [editOut, setEditOut] = useState<OutboundRoute | null>(null);
   const [editIn, setEditIn] = useState<InboundRoute | null>(null);
@@ -60,6 +62,8 @@ export default function Routing({ notify, me }: { notify: Notify; me: Me }) {
     listInboundRoutes().then(setInbound).catch((e) => notify({ kind: "err", text: (e as Error).message }));
     listTrunks().then(setTrunks).catch(() => {});
     listIVRs().then(setIvrs).catch(() => {});
+    // In-groups are the ACD destination an inbound route should normally use.
+    listIngroups().then((p) => setIngroups(p.ingroups.map((g) => g.name))).catch(() => {});
     listSounds().then((r) => setSounds(r.sounds)).catch(() => {});
   }, [notify]);
 
@@ -202,6 +206,7 @@ export default function Routing({ notify, me }: { notify: Notify; me: Me }) {
         <InForm
           initial={editIn}
           ivrs={ivrs}
+          ingroups={ingroups}
           sounds={sounds}
           trunks={trunks}
           onClose={() => setEditIn(null)}
@@ -357,10 +362,11 @@ function qPrompt(v: string): string {
 }
 
 function InForm({
-  initial, ivrs, sounds, trunks, onClose, onSaved, onError,
+  initial, ivrs, ingroups, sounds, trunks, onClose, onSaved, onError,
 }: {
   initial: InboundRoute;
   ivrs: IVR[];
+  ingroups: string[];
   sounds: SoundFile[];
   trunks: Trunk[];
   onClose: () => void;
@@ -405,7 +411,8 @@ function InForm({
               Send to
               <select value={dType} onChange={(e) => setDType(e.target.value)}>
                 <option value="extension">Extension</option>
-                <option value="queue">Ring agents (hold if busy)</option>
+                <option value="ingroup">In-group (ACD queue)</option>
+                <option value="queue">Ring agents — hunt group, no reporting</option>
                 <option value="external">External / GSM</option>
                 <option value="ivr">IVR menu</option>
                 <option value="voicemail">Voicemail</option>
@@ -416,8 +423,13 @@ function InForm({
           </div>
           {needsVal && (
             <label>
-              {dType === "ivr" ? "IVR menu" : dType === "voicemail" ? "Mailbox" : dType === "playback" ? "Prompt" : dType === "external" ? "External number via trunk" : dType === "queue" ? "Agents + hold prompt" : "Destination extension"}
-              {dType === "ivr" ? (
+              {dType === "ivr" ? "IVR menu" : dType === "ingroup" ? "In-group" : dType === "voicemail" ? "Mailbox" : dType === "playback" ? "Prompt" : dType === "external" ? "External number via trunk" : dType === "queue" ? "Agents + hold prompt" : "Destination extension"}
+              {dType === "ingroup" ? (
+                <select value={dVal} onChange={(e) => setDVal(e.target.value)}>
+                  <option value="">— choose in-group —</option>
+                  {ingroups.map((g) => <option key={g} value={g}>{g}</option>)}
+                </select>
+              ) : dType === "ivr" ? (
                 <select value={dVal} onChange={(e) => setDVal(e.target.value)}>
                   <option value="">— choose menu —</option>
                   {ivrs.map((v) => <option key={v.id} value={v.name}>{v.name}</option>)}

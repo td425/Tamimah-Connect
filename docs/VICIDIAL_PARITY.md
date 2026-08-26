@@ -80,7 +80,7 @@ committing to, expressed as domains rather than endpoints:
 - **Recording lookup/management** — Asterisk can record; nothing indexes it.
 - **Remote agents**, **CID groups**, **campaign presets**, **alt dispo URLs**.
 
-### 2.3 One existing inconsistency this plan must fix
+### 2.3 One existing inconsistency this plan must fix — **fixed in P5**
 
 `store/ivr.go` compiles the `queue` action into a `While`/`Dial()` retry loop —
 **not** Asterisk `app_queue`. But `docs/CALL_CENTER.md` and `store/dashboard.go`
@@ -188,7 +188,7 @@ under a `requirePerm` group → typed client in `web/src/api.ts` → a component
 | **P2 — Campaigns & manual dial** ✅ | `tpbx_campaigns`, `tpbx_dispositions`, `tpbx_pause_codes`, `tpbx_agents`, `tpbx_lead_calls`; campaign CRUD UI, agent accounts with campaign assignment, manual + preview dial from a lead, disposition writing back to the lead. **Shipped** — migration 0027; see `DEEP_INDEX.md` §21. | L | a usable outbound desk |
 | **P3 — Agent desktop v2** ✅ (web) | Agent screen on `/phone`: campaign selection, pause-with-code, script panel, lead on screen with live field edit, disposition bar, callbacks, alt-phone dialing, wrap-up timer; agent identity resolved from the softphone login. **Shipped** — migration 0028; see `DEEP_INDEX.md` §22. Transfer/conference, park and DTMF already exist in the phone itself. The Electron and native-Android clients still need the same panel — they cannot be built or tested in this container (see `NATIVE_SOFTPHONE.md`), and their `/api/agent/*` contract is unchanged, so they keep working as before. | XL | ViciDial's agent surface |
 | **P4 — Dialer engine** ✅ | `internal/dialer`: hopper filler, pacing (`RATIO` → `ADAPT_*`) with a hard abandoned-call brake, ARI holding-bridge connect, drop handling + safe harbour, outcome logging, live dialer panel, and DNC (pulled forward from P6 — a machine that cannot check a suppression list must not dial). **Shipped** — migration 0029; see `DEEP_INDEX.md` §23. The ARI call flow needs a live Asterisk to exercise; AMD and call-time windows are not done (below). | XL | the actual product |
-| **P5 — In-groups & real ACD** | Move the generated `queue` action onto `app_queue` with realtime queues + members (fixes §2.3), skills-based in-groups, DID→in-group routing, agent in-group selection, blended (`INBOUND_MAN`) agents. | L | inbound parity + working dashboard |
+| **P5 — In-groups & real ACD** ✅ | New `ingroup` destination compiling to `Queue()` on realtime queues + members (**fixes §2.3**), skill penalties, DID→in-group routing, agent in-group selection with desk/ACD pause sync. **Shipped** — migration 0030; see `DEEP_INDEX.md` §24. Blended `INBOUND_MAN` agents are not done: an agent can work a campaign and take in-group calls, but nothing yet balances the two. | L | inbound parity + working dashboard |
 | **P6 — Compliance & data hygiene** | DNC (global + per-campaign), filter phone groups, call-time/timezone windows, lead archive/dearchive, list reset, duplicate-check options. | M | legal to run |
 | **P7 — Recordings & monitoring** | Recording index + playback UI, on-demand start/stop, listen/whisper/barge (`blind_monitor` equivalent via ARI snoop), QA scoring hooks. | M | supervision |
 | **P8 — Reporting parity** | `agent_stats_export`, `call_status_stats`, `call_dispo_report`, real-time agent/in-group/user-group status boards, export in csv/tab/json/pipe. Extends `store/dashboard.go`. | M | management |

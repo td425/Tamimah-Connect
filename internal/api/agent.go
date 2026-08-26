@@ -147,6 +147,12 @@ func (s *Server) handleAgentLogout(w http.ResponseWriter, r *http.Request) {
 			_ = s.Work.Log(ctx, acct.Username, acct.Extension, 0, "logout", "")
 			_ = s.Work.SetPaused(ctx, acct.ID, true, "LOGOUT")
 			_ = s.Work.SetCurrent(ctx, acct.ID, 0, 0)
+			// Leave every queue: an ACD must never ring a phone nobody is
+			// sitting at, and a signed-out agent is exactly that.
+			if s.Ingroups != nil {
+				_ = s.Ingroups.SignOut(ctx, acct.Extension)
+				s.reloadQueueMembers(ctx)
+			}
 		}
 		cancel()
 	}
